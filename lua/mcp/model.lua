@@ -1,10 +1,14 @@
 ---@class mcp.EndpointDescriptor
----@field transport 'socket'
----@field socket_kind 'abstract'
----@field socket_name string
+---@field transport 'socket'|'http'
+---@field socket_kind? 'abstract'
+---@field socket_name? string
+---@field url? string
+---@field http_host? string
+---@field http_port? integer
 ---@field command string
 ---@field args string[]
 ---@field env table<string, string>
+---@field invocation table
 
 ---@class mcp.ToolSpec
 ---@field name string
@@ -44,4 +48,7 @@
 ---@class mcp.Config
 ---@field socket_prefix string
 ---@field bridge_command string
-
+---@field transport 'socket'|'http'
+---@field http_host string
+---@field http_port integer
+---@field auto_start boolean

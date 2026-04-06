@@ -16,7 +16,7 @@ function M.call_tool(namespaced_name, arguments, context)
         }
     end
 
-    local ok, result, handler_error = pcall(tool.handler, arguments or {}, context or {})
+    local ok, result, handler_error, warning = pcall(tool.handler, arguments or {}, context or {})
 
     if not ok then
         return nil, {
@@ -26,10 +26,10 @@ function M.call_tool(namespaced_name, arguments, context)
     end
 
     if handler_error ~= nil then
-        return nil, handler_error
+        return nil, handler_error, warning
     end
 
-    return result or {}, nil
+    return result or {}, nil, warning
 end
 
 return M

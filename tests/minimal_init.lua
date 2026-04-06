@@ -23,5 +23,5 @@ require('lazy').setup({
     { 'nvim-lua/plenary.nvim', lazy = false },
 }, {
     root = vim.fn.stdpath('data') .. '/lazy',
-    lockfile = vim.fn.stdpath('config') .. '/lazy-lock.json',
+    lockfile = vim.fn.stdpath('state') .. '/lazy-lock.json',
 })

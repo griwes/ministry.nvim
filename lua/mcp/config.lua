@@ -2,6 +2,11 @@
 local defaults = {
     socket_prefix = 'nvim_mcp',
     bridge_command = 'socat',
+    transport = 'socket',
+    http_host = '127.0.0.1',
+    http_port = 0,
+    enable_terminal_tools = false,
+    auto_start = true,
 }
 
 local current = vim.deepcopy(defaults)
@@ -27,4 +32,3 @@ function M.reset()
 end
 
 return M
-
