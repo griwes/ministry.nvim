@@ -448,10 +448,15 @@ function M.list_resource_template_descriptors()
 
     for _, server in ipairs(M.list_servers()) do
         for _, resource_template in ipairs(server.resource_templates or {}) do
+            local namespaced_name = string.format('%s/%s', server.name, resource_template.name)
+            local namespaced_uri_template = string.format('%s/%s', server.name, resource_template.uri_template)
+
             table.insert(descriptors, {
                 server = server.name,
-                name = resource_template.name,
-                uriTemplate = resource_template.uri_template,
+                namespaced_name = namespaced_name,
+                namespaced_uri_template = namespaced_uri_template,
+                name = namespaced_name,
+                uriTemplate = namespaced_uri_template,
                 description = resource_template.description,
                 mimeType = resource_template.mime_type,
             })
@@ -459,11 +464,7 @@ function M.list_resource_template_descriptors()
     end
 
     table.sort(descriptors, function(left, right)
-        if left.server == right.server then
-            return left.uriTemplate < right.uriTemplate
-        end
-
-        return left.server < right.server
+        return left.namespaced_uri_template < right.namespaced_uri_template
     end)
 
     return descriptors

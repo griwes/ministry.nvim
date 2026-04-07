@@ -16,7 +16,11 @@ function M.call_tool(namespaced_name, arguments, context)
         }
     end
 
-    local ok, result, handler_error, warning = pcall(tool.handler, arguments or {}, context or {})
+    local packed = { pcall(tool.handler, arguments or {}, context or {}) }
+    local ok = packed[1]
+    local result = packed[2]
+    local handler_error = packed[3]
+    local warning = packed[4]
 
     if not ok then
         return nil, {

@@ -79,12 +79,14 @@ function M.write_disk(path, content)
     end
 
     local ok, write_error = handle:write(content)
-    handle:close()
+    local close_ok, close_error = handle:close()
 
-    if not ok then
+    if not ok or close_ok == false then
         return {
             code = -32000,
-            message = write_error or string.format('Failed to write file: %s', path),
+            message = write_error
+                or close_error
+                or string.format('Failed to write file: %s', path),
         }
     end
 
@@ -152,6 +154,101 @@ function M.reload_buffer(bufnr)
         end
     end
 
+    local function reload_hidden_buffer_without_window()
+        local name = vim.api.nvim_buf_get_name(bufnr)
+        local fallback_win
+
+        for _, winid in ipairs(vim.api.nvim_list_wins()) do
+            local config = vim.api.nvim_win_get_config(winid)
+            if config.relative == '' and vim.fn.getwinvar(winid, '&buftype') ~= 'nofile' then
+                fallback_win = winid
+                break
+            end
+        end
+
+        if fallback_win then
+            local original_buf = vim.api.nvim_win_get_buf(fallback_win)
+
+            local reload_ok, reload_err = xpcall(function()
+                vim.api.nvim_win_set_buf(fallback_win, bufnr)
+                run_checktime_in_window(fallback_win)
+            end, debug.traceback)
+
+            local restore_ok, restore_err = pcall(function()
+                if vim.api.nvim_win_is_valid(fallback_win) then
+                    vim.api.nvim_win_set_buf(fallback_win, original_buf)
+                end
+            end)
+
+            if not reload_ok then
+                error(reload_err)
+            end
+            if not restore_ok then
+                error(restore_err)
+            end
+            return
+        end
+
+        if name == '' then
+            error('failed to reload hidden buffer without a file path')
+        end
+
+        local lines = vim.fn.readfile(name, 'b')
+        if #lines > 0 and lines[#lines] == '' then
+            table.remove(lines)
+        end
+        local fileinfo = vim.fn.getfperm(name)
+        local writable = false
+
+        if vim.fn.filewritable and vim.fn.filewritable(name) == 1 then
+            writable = true
+        elseif type(fileinfo) == 'string' and fileinfo ~= '' then
+            writable = fileinfo:sub(3, 3) == 'w'
+        elseif vim.uv and vim.uv.fs_access then
+            writable = vim.uv.fs_access(name, 'W') or false
+        elseif vim.loop and vim.loop.fs_access then
+            writable = vim.loop.fs_access(name, 'W') or false
+        end
+
+        local original_readonly = vim.bo[bufnr].readonly
+        local original_modifiable = vim.bo[bufnr].modifiable
+        local readonly = not writable
+
+        if original_readonly and original_modifiable and writable then
+            readonly = true
+        end
+
+        local modifiable = original_modifiable
+        local endofline = false
+        local fileformat = 'unix'
+        local file_size = vim.fn.getfsize(name)
+
+        if file_size > 0 then
+            local handle = io.open(name, 'rb')
+            if handle ~= nil then
+                local data = handle:read('*a') or ''
+                handle:close()
+                endofline = data:sub(-1) == '\n'
+                if data:find('\r\n', 1, true) then
+                    fileformat = 'dos'
+                elseif data:find('\r', 1, true) then
+                    fileformat = 'mac'
+                end
+            end
+        end
+
+        vim.bo[bufnr].modifiable = true
+        vim.bo[bufnr].readonly = false
+        vim.bo[bufnr].modified = false
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+        vim.bo[bufnr].endofline = endofline
+        vim.bo[bufnr].fixendofline = endofline
+        vim.bo[bufnr].fileformat = fileformat
+        vim.bo[bufnr].readonly = readonly
+        vim.bo[bufnr].modifiable = modifiable
+        vim.bo[bufnr].modified = false
+    end
+
     local ok, reload_error = pcall(function()
         vim.api.nvim_buf_call(bufnr, function()
             local windows = vim.fn.win_findbuf(bufnr)
@@ -176,40 +273,7 @@ function M.reload_buffer(bufnr)
                 if fallback_win then
                     run_checktime_in_window(fallback_win)
                 else
-                    local temp_buf = vim.api.nvim_create_buf(false, true)
-                    local temp_win
-                    local ok_open, open_err = pcall(vim.api.nvim_open_win, temp_buf, false, {
-                        relative = 'editor',
-                        row = 0,
-                        col = 0,
-                        width = 1,
-                        height = 1,
-                        style = 'minimal',
-                        focusable = false,
-                        noautocmd = true,
-                    })
-
-                    if ok_open then
-                        temp_win = open_err
-                    else
-                        if vim.api.nvim_buf_is_valid(temp_buf) then
-                            vim.api.nvim_buf_delete(temp_buf, { force = true })
-                        end
-                        error('failed to create temporary reload window: ' .. tostring(open_err))
-                    end
-
-                    local ok_reload, reload_err_inner = xpcall(function()
-                        run_checktime_in_window(temp_win)
-                    end, debug.traceback)
-                    if vim.api.nvim_win_is_valid(temp_win) then
-                        vim.api.nvim_win_close(temp_win, true)
-                    end
-                    if vim.api.nvim_buf_is_valid(temp_buf) then
-                        vim.api.nvim_buf_delete(temp_buf, { force = true })
-                    end
-                    if not ok_reload then
-                        error(reload_err_inner)
-                    end
+                    reload_hidden_buffer_without_window()
                 end
 
                 return
@@ -309,12 +373,16 @@ function M.write_file(path, content)
     local warning = nil
 
     if bufnr ~= nil then
-        warning = M.reload_buffer(bufnr)
+        local reload_error = M.reload_buffer(bufnr)
+
+        if reload_error ~= nil then
+            warning = reload_error
+        end
     end
 
     return {
         path = normalized,
-        reloaded_buffer = bufnr ~= nil,
+        reloaded_buffer = bufnr ~= nil and warning == nil,
     },
         nil,
         warning

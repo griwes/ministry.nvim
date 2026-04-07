@@ -3,14 +3,16 @@ local M = {}
 ---@param bufnr integer
 ---@return table
 local function buffer_context(bufnr)
+    local loaded = vim.api.nvim_buf_is_loaded(bufnr)
+
     return {
         bufnr = bufnr,
         name = vim.api.nvim_buf_get_name(bufnr),
-        lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false),
-        filetype = vim.bo[bufnr].filetype,
-        modified = vim.bo[bufnr].modified,
-        listed = vim.bo[bufnr].buflisted,
-        loaded = vim.api.nvim_buf_is_loaded(bufnr),
+        lines = loaded and vim.api.nvim_buf_get_lines(bufnr, 0, -1, false) or {},
+        filetype = loaded and vim.bo[bufnr].filetype or '',
+        modified = loaded and vim.bo[bufnr].modified or false,
+        listed = loaded and vim.bo[bufnr].buflisted or vim.fn.buflisted(bufnr) == 1,
+        loaded = loaded,
     }
 end
 

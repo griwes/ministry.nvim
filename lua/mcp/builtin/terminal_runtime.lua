@@ -115,6 +115,7 @@ function M.create(command, cwd)
     local terminal_id = next_id()
     local stdout_chunks = {}
     local stderr_chunks = {}
+    local pending_completed
 
     if cwd ~= nil then
         cwd = editor_io.normalize_path(cwd)
@@ -141,9 +142,10 @@ function M.create(command, cwd)
             cwd = cwd,
             text = true,
         },
-        vim.schedule_wrap(function(obj)
+        function(obj)
             local terminal = terminals[terminal_id]
             if terminal == nil then
+                pending_completed = obj
                 return
             end
 
@@ -151,7 +153,7 @@ function M.create(command, cwd)
             append_output_if_missing(terminal.stderr_chunks, obj.stderr)
 
             terminal.completed = obj
-        end)
+        end
     )
 
     if not ok then
@@ -161,11 +163,18 @@ function M.create(command, cwd)
         }
     end
 
+    if pending_completed ~= nil then
+        return nil, {
+            code = -32000,
+            message = pending_completed.stderr or pending_completed.stdout or 'failed to start terminal command',
+        }
+    end
+
     terminals[terminal_id] = {
         proc = proc,
         stdout_chunks = stdout_chunks,
         stderr_chunks = stderr_chunks,
-        completed = nil,
+        completed = pending_completed,
     }
 
     return {

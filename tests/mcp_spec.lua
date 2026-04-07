@@ -432,6 +432,32 @@ describe('mcp', function()
         }, call.result)
     end)
 
+    it('preserves warnings from direct tool dispatch', function()
+        local plugin = require('mcp')
+        local warning = {
+            code = -32001,
+            message = 'non-fatal warning',
+        }
+
+        plugin.register_server({
+            name = 'editor',
+            tools = {
+                {
+                    name = 'echo',
+                    handler = function()
+                        return { ok = true }, nil, warning
+                    end,
+                },
+            },
+        })
+
+        local result, err, returned_warning = plugin.call_tool('editor/echo', {}, {})
+
+        assert.is_nil(err)
+        assert.are.same({ ok = true }, result)
+        assert.are.same(warning, returned_warning)
+    end)
+
     it('includes warnings for structured tools/call results without deep-copying nested values', function()
         local plugin = require('mcp')
         local marker = function()
@@ -456,7 +482,9 @@ describe('mcp', function()
                                 },
                             },
                             marker = marker,
-                        }, nil, warning
+                        },
+                            nil,
+                            warning
                     end,
                 },
             },
@@ -491,7 +519,9 @@ describe('mcp', function()
                                 type = 'text',
                                 text = 'hello',
                             },
-                        }, nil, warning
+                        },
+                            nil,
+                            warning
                     end,
                 },
             },
@@ -583,7 +613,7 @@ describe('mcp', function()
         assert.is_nil(resource_list.error)
         assert.are.equal('editor/buffer://current', resource_list.result.resources[1].namespaced_uri)
         assert.is_nil(template_list.error)
-        assert.are.equal('buffer://{bufnr}', template_list.result.resourceTemplates[1].uriTemplate)
+        assert.are.equal('editor/buffer://{bufnr}', template_list.result.resourceTemplates[1].uriTemplate)
         assert.is_nil(resource_read.error)
         assert.are.equal('buffer://current', resource_request.uri)
         assert.are.equal('editor/buffer://current', resource_request.namespaced_uri)
@@ -630,7 +660,101 @@ describe('mcp', function()
         assert.are.equal('editor/buffer://scalar', resource_read.result.contents[1].uri)
         assert.are.equal('7', resource_read.result.contents[1].text)
         assert.is_nil(prompt_get.error)
+        assert.are.equal('scalar_prompt', prompt_get.result.name)
         assert.are.equal('9', prompt_get.result.messages[1].content.text)
+    end)
+
+    it('adds prompt metadata to normalized prompt results', function()
+        local plugin = require('mcp')
+
+        plugin.register_server({
+            name = 'editor',
+        })
+
+        plugin.register_prompt('editor', {
+            name = 'describe',
+            description = 'Describe the current buffer.',
+            handler = function()
+                return {
+                    messages = {
+                        {
+                            role = 'user',
+                            content = {
+                                type = 'text',
+                                text = 'hello',
+                            },
+                        },
+                    },
+                }
+            end,
+        })
+
+        local prompt_get = plugin.handle_request('prompts/get', {
+            name = 'editor/describe',
+        }, 29, {})
+
+        assert.is_nil(prompt_get.error)
+        assert.are.equal('describe', prompt_get.result.name)
+        assert.are.equal('Describe the current buffer.', prompt_get.result.description)
+        assert.are.equal('hello', prompt_get.result.messages[1].content.text)
+    end)
+
+    it('normalizes single resource content objects into a list', function()
+        local plugin = require('mcp')
+
+        plugin.register_server({
+            name = 'editor',
+        })
+
+        plugin.register_resource('editor', {
+            uri = 'buffer://single',
+            handler = function()
+                return {
+                    contents = {
+                        text = 'single',
+                    },
+                }
+            end,
+        })
+
+        local resource_read = plugin.handle_request('resources/read', {
+            uri = 'editor/buffer://single',
+        }, 30, {})
+
+        assert.is_nil(resource_read.error)
+        assert.are.equal(1, #resource_read.result.contents)
+        assert.are.equal('editor/buffer://single', resource_read.result.contents[1].uri)
+        assert.are.equal('single', resource_read.result.contents[1].text)
+    end)
+
+    it('does not mutate handler-owned resource result tables when normalizing contents', function()
+        local plugin = require('mcp')
+
+        plugin.register_server({
+            name = 'editor',
+        })
+
+        local cached_result = {
+            contents = {
+                text = 'single',
+            },
+        }
+
+        plugin.register_resource('editor', {
+            uri = 'buffer://cached',
+            handler = function()
+                return cached_result
+            end,
+        })
+
+        local resource_read = plugin.handle_request('resources/read', {
+            uri = 'editor/buffer://cached',
+        }, 31, {})
+
+        assert.is_nil(resource_read.error)
+        assert.are.equal(1, #resource_read.result.contents)
+        assert.is_false(vim.islist(cached_result.contents))
+        assert.are.equal('single', cached_result.contents.text)
     end)
 
     it('prefers the longest matching server prefix for resources and prompts', function()
@@ -1009,6 +1133,7 @@ describe('mcp', function()
 
     it('accepts split tools/call payloads with unique flattened tool names', function()
         local plugin = require('mcp')
+        local calls = 0
 
         plugin.register_server({
             name = 'neovim',
@@ -1016,6 +1141,7 @@ describe('mcp', function()
                 editor = {
                     list_buffers = {
                         handler = function()
+                            calls = calls + 1
                             return {
                                 ok = true,
                             }
@@ -1031,11 +1157,59 @@ describe('mcp', function()
         }, 7, {})
 
         assert.is_nil(call.error)
+        assert.are.equal(1, calls)
         assert.are.same({
             {
                 type = 'text',
                 text = vim.json.encode({
                     ok = true,
+                }),
+            },
+        }, call.result.content)
+    end)
+
+    it('prefers exact split tool names before flattened fallback', function()
+        local plugin = require('mcp')
+        local flat_calls = 0
+        local nested_calls = 0
+
+        plugin.register_server({
+            name = 'neovim',
+            tools = {
+                ['foo__bar'] = {
+                    handler = function()
+                        flat_calls = flat_calls + 1
+                        return {
+                            tool = 'flat',
+                        }
+                    end,
+                },
+                foo = {
+                    bar = {
+                        handler = function()
+                            nested_calls = nested_calls + 1
+                            return {
+                                tool = 'nested',
+                            }
+                        end,
+                    },
+                },
+            },
+        })
+
+        local call = plugin.handle_request('tools/call', {
+            server = 'neovim',
+            tool = 'foo__bar',
+        }, 7, {})
+
+        assert.is_nil(call.error)
+        assert.are.equal(1, flat_calls)
+        assert.are.equal(0, nested_calls)
+        assert.are.same({
+            {
+                type = 'text',
+                text = vim.json.encode({
+                    tool = 'flat',
                 }),
             },
         }, call.result.content)
@@ -1198,6 +1372,33 @@ describe('mcp', function()
                 }),
             },
         }, call.result.content)
+    end)
+
+    it('rejects conflicting qualified and split tool identifiers', function()
+        local plugin = require('mcp')
+
+        plugin.register_server({
+            name = 'alpha',
+            tools = {
+                x = {
+                    handler = function()
+                        return { ok = true }
+                    end,
+                },
+            },
+        })
+
+        local call = plugin.handle_request('tools/call', {
+            name = 'alpha/x',
+            server = 'beta',
+            tool = 'y',
+            arguments = {},
+        }, 7, {})
+
+        assert.are.same({
+            code = -32602,
+            message = 'Conflicting tool identifiers',
+        }, call.error)
     end)
 
     it('does not infer routing from tools/call arguments.server and arguments.tool', function()
@@ -1766,6 +1967,27 @@ describe('mcp', function()
         assert.are.equal('http', endpoint.transport)
         assert.are.equal('http://127.0.0.1:8877/mcp', endpoint.url)
         assert.are.equal(8877, endpoint.http_port)
+    end)
+
+    it('advertises HTTP bearer auth in the invocation descriptor', function()
+        local plugin = require('mcp')
+        plugin.setup({
+            transport = 'http',
+            http_host = '127.0.0.1',
+            http_port = 8877,
+            http_token = 'secret-token',
+        })
+
+        local invocation = plugin.endpoint_invocation()
+        local endpoint = plugin.endpoint()
+
+        assert.are.equal('secret-token', endpoint.http_token)
+        assert.are.same({
+            url = 'http://127.0.0.1:8877/mcp',
+            headers = {
+                Authorization = 'Bearer secret-token',
+            },
+        }, invocation)
     end)
 
     it('brackets IPv6 hosts in advertised HTTP endpoints', function()
@@ -2694,13 +2916,13 @@ describe('mcp', function()
 
         assert.are.equal(1, #writes)
         assert.truthy(writes[1]:find('HTTP/1.1 204 No Content', 1, true) ~= nil)
-        assert.falsy(writes[1]:find('Content-Length:', 1, true) ~= nil)
+        assert.truthy(writes[1]:find('Content-Length: 0', 1, true) ~= nil)
         assert.truthy(writes[1]:find('Connection: keep-alive', 1, true) ~= nil)
         assert.falsy(writes[1]:find('Access-Control-Allow-Origin:', 1, true) ~= nil)
         assert.truthy(writes[1]:find('Access-Control-Allow-Methods: POST, OPTIONS', 1, true) ~= nil)
     end)
 
-    it('omits Content-Length for direct 204 responses', function()
+    it('includes Content-Length: 0 for direct 204 responses on keep-alive connections', function()
         local send_response = require('mcp.http_server')._send_response
         local writes = {}
         local client = {
@@ -2721,9 +2943,9 @@ describe('mcp', function()
 
         assert.are.equal(1, #writes)
         assert.truthy(writes[1]:find('HTTP/1.1 204 No Content', 1, true) ~= nil)
-        assert.falsy(writes[1]:find('Content-Length:', 1, true) ~= nil)
+        assert.truthy(writes[1]:find('Content-Length: 0', 1, true) ~= nil)
         assert.truthy(writes[1]:find('Connection: keep-alive', 1, true) ~= nil)
-        assert.are.equal('HTTP/1.1 204 No Content\r\nConnection: keep-alive\r\n\r\n', writes[1])
+        assert.are.equal('HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n', writes[1])
     end)
 
     it('drops response bodies for direct 204 responses', function()
@@ -2746,7 +2968,7 @@ describe('mcp', function()
         send_response(client, 204, 'ignored body', {}, true, 'HTTP/1.1')
 
         assert.are.equal(1, #writes)
-        assert.are.equal('HTTP/1.1 204 No Content\r\nConnection: keep-alive\r\n\r\n', writes[1])
+        assert.are.equal('HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n', writes[1])
     end)
 
     it('returns 204 No Content for notification-only JSON-RPC batches over HTTP', function()
@@ -2800,7 +3022,7 @@ describe('mcp', function()
         assert.truthy(writes[1]:find('Access-Control-Allow-Methods: POST, OPTIONS', 1, true) ~= nil)
     end)
 
-    it('rejects OPTIONS /mcp when the Accept header is unsupported', function()
+    it('responds to OPTIONS /mcp even when the Accept header is unsupported', function()
         local http_server = require('mcp.http_server')
         local writes = {}
         local callback
@@ -2835,8 +3057,8 @@ describe('mcp', function()
         )
 
         assert.are.equal(1, #writes)
-        assert.truthy(writes[1]:find('HTTP/1.1 406 Not Acceptable', 1, true) ~= nil)
-        assert.truthy(writes[1]:find('unsupported accept header', 1, true) ~= nil)
+        assert.truthy(writes[1]:find('HTTP/1.1 204 No Content', 1, true) ~= nil)
+        assert.falsy(writes[1]:find('unsupported accept header', 1, true) ~= nil)
     end)
 
     it('responds to OPTIONS /mcp preflight requests with CORS headers', function()
@@ -2884,6 +3106,252 @@ describe('mcp', function()
         assert.truthy(writes[1]:find('Access-Control-Allow-Headers: Content%-Type, Accept') ~= nil)
     end)
 
+    it('accepts unauthenticated OPTIONS /mcp browser preflight requests when an HTTP token is configured', function()
+        local plugin = require('mcp')
+        local http_server = require('mcp.http_server')
+        local writes = {}
+        local callback
+        local original_config = vim.deepcopy(plugin.config)
+
+        plugin.setup({
+            transport = 'http',
+            http_host = '127.0.0.1',
+            http_port = 0,
+            http_token = 'secret-token',
+        })
+
+        local ok, err = xpcall(function()
+            local client = {
+                read_start = function(_, cb)
+                    callback = cb
+                end,
+                read_stop = function() end,
+                close = function() end,
+                is_closing = function()
+                    return false
+                end,
+                write = function(_, payload, cb)
+                    table.insert(writes, payload)
+                    if cb ~= nil then
+                        cb()
+                    end
+                end,
+            }
+
+            http_server._start_client_read(client)
+            callback(
+                nil,
+                table.concat({
+                    'OPTIONS /mcp HTTP/1.1',
+                    'Host: 127.0.0.1',
+                    'Origin: http://127.0.0.1:3000',
+                    'Access-Control-Request-Method: POST',
+                    'Access-Control-Request-Headers: Authorization, Content-Type',
+                    'Content-Length: 0',
+                    '',
+                    '',
+                }, '\r\n')
+            )
+
+            assert.are.equal(1, #writes)
+            assert.truthy(writes[1]:find('HTTP/1.1 204 No Content', 1, true) ~= nil)
+            assert.falsy(writes[1]:find('WWW-Authenticate: Bearer', 1, true) ~= nil)
+            assert.truthy(writes[1]:find('Access-Control-Allow-Origin: http://127.0.0.1:3000', 1, true) ~= nil)
+            assert.truthy(
+                writes[1]:find('Access-Control-Allow-Headers: Authorization, Content-Type, Accept', 1, true) ~= nil
+            )
+        end, function(message)
+            return debug.traceback(message, 2)
+        end)
+
+        plugin.setup(original_config)
+        if not ok then
+            error(err)
+        end
+    end)
+
+    it('rejects unauthenticated non-preflight OPTIONS /mcp requests when an HTTP token is configured', function()
+        local plugin = require('mcp')
+        local http_server = require('mcp.http_server')
+        local writes = {}
+        local callback
+        local original_config = vim.deepcopy(plugin.config)
+
+        plugin.setup({
+            transport = 'http',
+            http_host = '127.0.0.1',
+            http_port = 0,
+            http_token = 'secret-token',
+        })
+
+        local ok, err = xpcall(function()
+            local client = {
+                read_start = function(_, cb)
+                    callback = cb
+                end,
+                read_stop = function() end,
+                close = function() end,
+                is_closing = function()
+                    return false
+                end,
+                write = function(_, payload, cb)
+                    table.insert(writes, payload)
+                    if cb ~= nil then
+                        cb()
+                    end
+                end,
+            }
+
+            http_server._start_client_read(client)
+            callback(
+                nil,
+                table.concat({
+                    'OPTIONS /mcp HTTP/1.1',
+                    'Host: 127.0.0.1',
+                    'Content-Length: 0',
+                    '',
+                    '',
+                }, '\r\n')
+            )
+
+            assert.are.equal(1, #writes)
+            assert.truthy(writes[1]:find('HTTP/1.1 401 Unauthorized', 1, true) ~= nil)
+            assert.truthy(writes[1]:find('WWW-Authenticate: Bearer', 1, true) ~= nil)
+        end, function(message)
+            return debug.traceback(message, 2)
+        end)
+
+        plugin.setup(original_config)
+        if not ok then
+            error(err)
+        end
+    end)
+
+    it(
+        'rejects unauthenticated OPTIONS /mcp requests with non-POST access-control-request-method when an HTTP token is configured',
+        function()
+            local plugin = require('mcp')
+            local http_server = require('mcp.http_server')
+            local writes = {}
+            local callback
+            local original_config = vim.deepcopy(plugin.config)
+
+            plugin.setup({
+                transport = 'http',
+                http_host = '127.0.0.1',
+                http_port = 0,
+                http_token = 'secret-token',
+            })
+
+            local ok, err = xpcall(function()
+                local client = {
+                    read_start = function(_, cb)
+                        callback = cb
+                    end,
+                    read_stop = function() end,
+                    close = function() end,
+                    is_closing = function()
+                        return false
+                    end,
+                    write = function(_, payload, cb)
+                        table.insert(writes, payload)
+                        if cb ~= nil then
+                            cb()
+                        end
+                    end,
+                }
+
+                http_server._start_client_read(client)
+                callback(
+                    nil,
+                    table.concat({
+                        'OPTIONS /mcp HTTP/1.1',
+                        'Host: 127.0.0.1',
+                        'Origin: http://127.0.0.1:3000',
+                        'Access-Control-Request-Method: GET',
+                        'Content-Length: 0',
+                        '',
+                        '',
+                    }, '\r\n')
+                )
+
+                assert.are.equal(1, #writes)
+                assert.truthy(writes[1]:find('HTTP/1.1 401 Unauthorized', 1, true) ~= nil)
+                assert.truthy(writes[1]:find('WWW-Authenticate: Bearer', 1, true) ~= nil)
+            end, function(message)
+                return debug.traceback(message, 2)
+            end)
+
+            plugin.setup(original_config)
+            if not ok then
+                error(err)
+            end
+        end
+    )
+
+    it(
+        'rejects forged unauthenticated OPTIONS /mcp preflight headers when an Authorization header is present',
+        function()
+            local plugin = require('mcp')
+            local http_server = require('mcp.http_server')
+            local writes = {}
+            local callback
+            local original_config = vim.deepcopy(plugin.config)
+
+            plugin.setup({
+                transport = 'http',
+                http_host = '127.0.0.1',
+                http_port = 0,
+                http_token = 'secret-token',
+            })
+
+            local ok, err = xpcall(function()
+                local client = {
+                    read_start = function(_, cb)
+                        callback = cb
+                    end,
+                    read_stop = function() end,
+                    close = function() end,
+                    is_closing = function()
+                        return false
+                    end,
+                    write = function(_, payload, cb)
+                        table.insert(writes, payload)
+                        if cb ~= nil then
+                            cb()
+                        end
+                    end,
+                }
+
+                http_server._start_client_read(client)
+                callback(
+                    nil,
+                    table.concat({
+                        'OPTIONS /mcp HTTP/1.1',
+                        'Host: 127.0.0.1',
+                        'Origin: http://127.0.0.1:3000',
+                        'Access-Control-Request-Method: POST',
+                        'Authorization: Bearer forged-token',
+                        'Content-Length: 0',
+                        '',
+                        '',
+                    }, '\r\n')
+                )
+
+                assert.are.equal(1, #writes)
+                assert.truthy(writes[1]:find('HTTP/1.1 401 Unauthorized', 1, true) ~= nil)
+                assert.truthy(writes[1]:find('WWW-Authenticate: Bearer', 1, true) ~= nil)
+            end, function(message)
+                return debug.traceback(message, 2)
+            end)
+
+            plugin.setup(original_config)
+            if not ok then
+                error(err)
+            end
+        end
+    )
+
     it('does not reflect non-local origins on successful MCP responses', function()
         local http_server = require('mcp.http_server')
         local writes = {}
@@ -2927,10 +3395,9 @@ describe('mcp', function()
 
         assert.are.equal(1, #writes)
         assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
-        assert.truthy(writes[1]:find('Access-Control-Allow-Origin: ' .. origin, 1, true) ~= nil)
+        assert.falsy(writes[1]:find('Access-Control-Allow-Origin:', 1, true) ~= nil)
         assert.truthy(writes[1]:find('Vary: Origin', 1, true) ~= nil)
     end)
-
 
     it('allows localhost origins only for loopback hosts', function()
         local http_server = require('mcp.http_server')
@@ -2976,8 +3443,6 @@ describe('mcp', function()
         assert.are.equal(1, #writes)
         assert.truthy(writes[1]:find('Access-Control-Allow-Origin: ' .. origin, 1, true) ~= nil)
     end)
-
-
 
     it('reflects localhost origins for loopback IPv4 listeners', function()
         local http_server = require('mcp.http_server')
@@ -3129,7 +3594,7 @@ describe('mcp', function()
         assert.truthy(writes[1]:find('Vary: Origin', 1, true) ~= nil)
     end)
 
-    it('allows loopback origins beyond hard-coded localhost literals', function()
+    it('allows arbitrary loopback origins only for wildcard or localhost listeners', function()
         local http_server = require('mcp.http_server')
         local body = vim.json.encode({
             jsonrpc = '2.0',
@@ -3140,26 +3605,42 @@ describe('mcp', function()
             {
                 host = '127.0.0.2',
                 origin = 'https://localhost:3000',
+                allowed = false,
             },
             {
                 host = '127.0.0.2',
                 origin = 'https://127.0.0.2:3000',
+                allowed = true,
             },
             {
                 host = '[::1]',
                 origin = 'http://[::ffff:127.0.0.2]:3000',
+                allowed = false,
             },
             {
                 host = '[::1]',
                 origin = 'http://[::ffff:7f00:2]:3000',
+                allowed = false,
             },
             {
                 host = '127.0.0.2',
                 origin = 'http://[::ffff:127.0.0.2]:3000',
+                allowed = false,
             },
             {
                 host = '127.0.0.2',
                 origin = 'http://[::ffff:7f00:2]:3000',
+                allowed = false,
+            },
+            {
+                host = '0.0.0.0',
+                origin = 'https://localhost:3000',
+                allowed = true,
+            },
+            {
+                host = '[::]',
+                origin = 'http://[::ffff:127.0.0.2]:3000',
+                allowed = true,
             },
         }
 
@@ -3199,7 +3680,11 @@ describe('mcp', function()
 
             assert.are.equal(1, #writes)
             assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
-            assert.truthy(writes[1]:find('Access-Control-Allow-Origin: ' .. case.origin, 1, true) ~= nil)
+            if case.allowed then
+                assert.truthy(writes[1]:find('Access-Control-Allow-Origin: ' .. case.origin, 1, true) ~= nil)
+            else
+                assert.falsy(writes[1]:find('Access-Control-Allow-Origin: ' .. case.origin, 1, true) ~= nil)
+            end
         end
     end)
 
@@ -3317,6 +3802,119 @@ describe('mcp', function()
         assert.truthy(writes[1]:find('Access-Control-Allow-Origin: ' .. origin, 1, true) ~= nil)
     end)
 
+    it('does not reflect scoped IPv6 origins with RFC 6874 zone identifiers for unscoped bound hosts', function()
+        local plugin = require('mcp')
+        local http_server = require('mcp.http_server')
+        local body = vim.json.encode({
+            jsonrpc = '2.0',
+            id = 15,
+            method = 'ping',
+        })
+        local writes = {}
+        local callback
+        local origin = 'http://[fe80::1%25lo0]:3000'
+        local client = {
+            read_start = function(_, cb)
+                callback = cb
+            end,
+            read_stop = function() end,
+            close = function() end,
+            is_closing = function()
+                return false
+            end,
+            write = function(_, payload, cb)
+                table.insert(writes, payload)
+                if cb ~= nil then
+                    cb()
+                end
+            end,
+        }
+
+        plugin.setup({
+            transport = {
+                type = 'http',
+                http = {
+                    host = 'fe80::1',
+                    port = 0,
+                },
+            },
+        })
+
+        http_server._start_client_read(client)
+        callback(
+            nil,
+            table.concat({
+                'POST /mcp HTTP/1.1',
+                'Host: [fe80::1]',
+                'Origin: ' .. origin,
+                'Content-Type: application/json',
+                string.format('Content-Length: %d', #body),
+                '',
+                body,
+            }, '\r\n')
+        )
+
+        assert.are.equal(1, #writes)
+        assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
+        assert.falsy(writes[1]:find('Access-Control-Allow-Origin:', 1, true) ~= nil)
+    end)
+
+    it('does not reflect different scoped IPv6 origins for specifically bound hosts', function()
+        local plugin = require('mcp')
+        local http_server = require('mcp.http_server')
+        local body = vim.json.encode({
+            jsonrpc = '2.0',
+            id = 16,
+            method = 'ping',
+        })
+        local writes = {}
+        local callback
+        local origin = 'http://[fe80::2%25lo0]:3000'
+        local client = {
+            read_start = function(_, cb)
+                callback = cb
+            end,
+            read_stop = function() end,
+            close = function() end,
+            is_closing = function()
+                return false
+            end,
+            write = function(_, payload, cb)
+                table.insert(writes, payload)
+                if cb ~= nil then
+                    cb()
+                end
+            end,
+        }
+
+        plugin.setup({
+            transport = {
+                type = 'http',
+                http = {
+                    host = 'fe80::1',
+                    port = 0,
+                },
+            },
+        })
+
+        http_server._start_client_read(client)
+        callback(
+            nil,
+            table.concat({
+                'POST /mcp HTTP/1.1',
+                'Host: [fe80::1]',
+                'Origin: ' .. origin,
+                'Content-Type: application/json',
+                string.format('Content-Length: %d', #body),
+                '',
+                body,
+            }, '\r\n')
+        )
+
+        assert.are.equal(1, #writes)
+        assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
+        assert.falsy(writes[1]:find('Access-Control-Allow-Origin:', 1, true) ~= nil)
+    end)
     it('does not emit allow-origin for invalid Origin header values', function()
         local http_server = require('mcp.http_server')
         local body = vim.json.encode({
@@ -3377,6 +3975,9 @@ describe('mcp', function()
             'https://[:::]',
             'https://[:]:443',
             'https://[....]:443',
+            'https://[fe80::1%lo0]:443',
+            'https://[fe80::1%25]:443',
+            'https://[fe80::1%25lo/0]:443',
             'https://[::ffff:999.1.1.1]:443',
             'https://[2001:db8:192.168.0.1]:443',
             'https://[127.0.0.1]',
@@ -3468,7 +4069,7 @@ describe('mcp', function()
         assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
     end)
 
-    it('accepts text/event-stream accept headers for MCP compatibility', function()
+    it('rejects text/event-stream when json is not accepted', function()
         local http_server = require('mcp.http_server')
         local writes = {}
         local callback
@@ -3505,8 +4106,7 @@ describe('mcp', function()
         )
 
         assert.are.equal(1, #writes)
-        assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
-        assert.truthy(writes[1]:find('Content-Type: application/json', 1, true) ~= nil)
+        assert.truthy(writes[1]:find('HTTP/1.1 406 Not Acceptable', 1, true) ~= nil)
     end)
 
     it('ignores optional text/event-stream when json is also accepted', function()
@@ -3626,7 +4226,7 @@ describe('mcp', function()
 
         assert.are.equal(1, #writes)
         assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
-        assert.truthy(writes[1]:find('Content%-Type: application/jsonrpc', 1) ~= nil)
+        assert.truthy(writes[1]:find('Content%-Type: application/json\r\n', 1) ~= nil)
     end)
 
     it('prefers q over specificity when choosing between response content types', function()
@@ -3706,7 +4306,7 @@ describe('mcp', function()
 
         assert.are.equal(1, #writes)
         assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
-        assert.truthy(writes[1]:find('Content%-Type: application/jsonrpc', 1) ~= nil)
+        assert.truthy(writes[1]:find('Content%-Type: application/json\r\n', 1) ~= nil)
     end)
 
     it('prefers the most specific accept match before header order', function()
@@ -3746,7 +4346,7 @@ describe('mcp', function()
 
         assert.are.equal(1, #writes)
         assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
-        assert.truthy(writes[1]:find('Content%-Type: application/jsonrpc\r\n', 1) ~= nil)
+        assert.truthy(writes[1]:find('Content%-Type: application/json\r\n', 1) ~= nil)
     end)
 
     it('accepts wildcard fallback when a specific accept entry has q=0', function()
@@ -3910,7 +4510,6 @@ describe('mcp', function()
         assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
         assert.truthy(writes[1]:find('Content%-Type: application/json\r\n', 1) ~= nil)
     end)
-
 
     it('rejects folded headers as malformed requests', function()
         local http_server = require('mcp.http_server')
@@ -4076,8 +4675,7 @@ describe('mcp', function()
         assert.truthy(response:find('ambiguous content%-length', 1) ~= nil)
     end)
 
-
-    it('rejects requests that use bare LF header framing', function()
+    it('accepts requests that use bare LF header framing', function()
         local http_server = require('mcp.http_server')
         local writes = {}
         local callback
@@ -4110,6 +4708,53 @@ describe('mcp', function()
                 body,
             }, '\n')
         )
+
+        vim.wait(1000, function()
+            return #writes == 1
+        end)
+
+        assert.are.equal(1, #writes)
+        assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
+        assert.truthy(writes[1]:find('"jsonrpc":"2.0"', 1, true) ~= nil)
+    end)
+
+    it('rejects requests that mix CRLF and LF framing', function()
+        local http_server = require('mcp.http_server')
+        local writes = {}
+        local callback
+        local body = '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+        local client = {
+            read_start = function(_, cb)
+                callback = cb
+            end,
+            read_stop = function() end,
+            close = function() end,
+            is_closing = function()
+                return false
+            end,
+            write = function(_, payload, cb)
+                table.insert(writes, payload)
+                if cb ~= nil then
+                    cb()
+                end
+            end,
+        }
+
+        http_server._start_client_read(client)
+        callback(
+            nil,
+            table.concat({
+                'POST /mcp HTTP/1.1',
+                'Host: 127.0.0.1\r',
+                string.format('Content-Length: %d', #body),
+                '',
+                body,
+            }, '\n')
+        )
+
+        vim.wait(1000, function()
+            return #writes == 1
+        end)
 
         assert.are.equal(1, #writes)
         assert.truthy(writes[1]:find('HTTP/1.1 400 Bad Request', 1, true) ~= nil)
@@ -4451,6 +5096,7 @@ describe('mcp', function()
 
         assert.are.equal(1, #writes)
         assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
+        assert.truthy(writes[1]:find('Content-Type: application/json', 1, true) ~= nil)
     end)
 
     it('returns correct HTTP errors for invalid method and route', function()
@@ -4603,8 +5249,8 @@ describe('mcp', function()
         assert.truthy(application_json_with_whitespace_charset:find('HTTP/1.1 200 OK', 1, true) ~= nil)
         assert.truthy(application_jsonrpc:find('HTTP/1.1 200 OK', 1, true) ~= nil)
         assert.truthy(application_jsonrpc_with_charset:find('HTTP/1.1 200 OK', 1, true) ~= nil)
-        assert.truthy(structured_json:find('HTTP/1.1 415 Unsupported Media Type', 1, true) ~= nil)
-        assert.truthy(structured_json:find('"error":"unsupported content type"', 1, true) ~= nil)
+        assert.truthy(structured_json:find('HTTP/1.1 200 OK', 1, true) ~= nil)
+        assert.truthy(structured_json:find('"jsonrpc":"2.0"', 1, true) ~= nil)
         assert.truthy(non_json:find('HTTP/1.1 415 Unsupported Media Type', 1, true) ~= nil)
         assert.truthy(non_json:find('"error":"unsupported content type"', 1, true) ~= nil)
     end)
@@ -4697,9 +5343,15 @@ describe('mcp', function()
             return writes[1]
         end
 
+        local invalid_null = run(vim.NIL)
+        local invalid_number = run(42)
         local invalid_string = run('bad')
         local invalid_boolean = run(true)
 
+        assert.truthy(invalid_null:find('HTTP/1.1 200 OK', 1, true) ~= nil)
+        assert.truthy(invalid_null:find('"code":-32600', 1, true) ~= nil)
+        assert.truthy(invalid_number:find('HTTP/1.1 200 OK', 1, true) ~= nil)
+        assert.truthy(invalid_number:find('"code":-32600', 1, true) ~= nil)
         assert.truthy(invalid_string:find('HTTP/1.1 200 OK', 1, true) ~= nil)
         assert.truthy(invalid_string:find('"code":-32600', 1, true) ~= nil)
         assert.truthy(invalid_boolean:find('HTTP/1.1 200 OK', 1, true) ~= nil)
@@ -5624,6 +6276,43 @@ describe('mcp', function()
         assert.are.equal(absolute_cwd, seen_opts.cwd)
     end)
 
+    it('returns a structured error when terminal startup fails asynchronously', function()
+        local runtime = require('mcp.builtin.terminal_runtime')
+        local original_system = vim.system
+
+        vim.system = function(command, opts, on_exit)
+            if on_exit ~= nil then
+                on_exit({
+                    code = 127,
+                    signal = 0,
+                    stdout = '',
+                    stderr = 'sh: missing-command: not found',
+                })
+            end
+            return {
+                wait = function()
+                    return {
+                        code = 127,
+                        signal = 0,
+                        stdout = '',
+                        stderr = 'sh: missing-command: not found',
+                    }
+                end,
+                kill = function() end,
+            }
+        end
+
+        local result, err = runtime.create({ 'missing-command' })
+
+        vim.system = original_system
+
+        assert.is_nil(result)
+        assert.are.same({
+            code = -32000,
+            message = 'sh: missing-command: not found',
+        }, err)
+    end)
+
     it('returns structured errors for terminal invalid arguments and released terminal lookups', function()
         local plugin = require('mcp')
         plugin.setup()
@@ -5757,7 +6446,7 @@ describe('mcp', function()
             path = path,
             content = 'after\nvalue\n',
         }, {})
-        local result, err = plugin.call_tool('neovim/editor/apply_diff_file', {
+        local result, err, warning = plugin.call_tool('neovim/editor/apply_diff_file', {
             path = path,
             content = 'after\nvalue\n',
         }, {})
@@ -5867,10 +6556,13 @@ describe('mcp', function()
             return reload_warning
         end
 
-        local result, err = plugin.call_tool('neovim/editor/apply_diff_file', {
-            path = path,
-            content = 'after\nvalue\n',
-        }, {})
+        local response = plugin.handle_request('tools/call', {
+            name = 'neovim/editor/apply_diff_file',
+            arguments = {
+                path = path,
+                content = 'after\nvalue\n',
+            },
+        }, 1, {})
 
         editor_io.reload_buffer = original_reload_buffer
 
@@ -5878,9 +6570,19 @@ describe('mcp', function()
         local disk = assert(read_handle:read('*a'))
         read_handle:close()
 
-        assert.is_nil(err)
+        assert.is_nil(response.error)
+        local result = response.result
         assert.is_not_nil(result)
-        assert.is_true(result.reloaded_buffer)
+        assert.are.same({
+            {
+                type = 'text',
+                text = vim.json.encode({
+                    path = path,
+                    reloaded_buffer = false,
+                }),
+            },
+        }, result.content)
+        assert.are.same(reload_warning, result.warning)
         assert.are.equal('after\nvalue\n', disk)
 
         vim.fn.delete(root, 'rf')
@@ -6373,6 +7075,55 @@ describe('mcp', function()
         end
     end)
 
+    it('parses zero-length request bodies without consuming pipelined data', function()
+        local http_server = require('mcp.http_server')
+        local writes = {}
+        local callback
+        local client = {
+            read_start = function(_, cb)
+                callback = cb
+            end,
+            read_stop = function() end,
+            close = function() end,
+            is_closing = function()
+                return false
+            end,
+            write = function(_, payload, cb)
+                table.insert(writes, payload)
+                if cb ~= nil then
+                    cb()
+                end
+            end,
+        }
+
+        http_server._start_client_read(client)
+        callback(
+            nil,
+            table.concat({
+                'POST /mcp HTTP/1.1',
+                'Host: 127.0.0.1',
+                'Content-Type: application/json',
+                'Content-Length: 0',
+                '',
+                '',
+                'POST /mcp HTTP/1.1',
+                'Host: 127.0.0.1',
+                'Content-Type: application/json',
+                'Content-Length: 36',
+                '',
+                '{"jsonrpc":"2.0","method":"ping"}',
+            }, '\r\n')
+        )
+
+        vim.wait(1000, function()
+            return #writes == 2
+        end)
+
+        assert.are.equal(2, #writes)
+        assert.truthy(writes[1]:find('Invalid Request', 1, true) ~= nil)
+        assert.truthy(writes[2]:find('204 No Content', 1, true) ~= nil)
+    end)
+
     it('reloads a hidden file-backed buffer without window APIs', function()
         local io_mod = require('mcp.builtin.editor.io')
         local root = vim.fn.tempname()
@@ -6389,6 +7140,174 @@ describe('mcp', function()
         vim.fn.writefile({ 'after', 'value' }, path)
 
         local original_open_win = vim.api.nvim_open_win
+        local open_calls = 0
+        vim.api.nvim_open_win = function(...)
+            open_calls = open_calls + 1
+            error('window APIs unavailable')
+        end
+
+        local reload_err = io_mod.reload_buffer(target_buf)
+
+        vim.api.nvim_open_win = original_open_win
+
+        assert.are.equal(0, open_calls)
+        assert.is_nil(reload_err)
+        assert.are.same({ 'after', 'value' }, vim.api.nvim_buf_get_lines(target_buf, 0, -1, false))
+
+        vim.api.nvim_buf_delete(target_buf, { force = true })
+        vim.fn.delete(root, 'rf')
+    end)
+
+    it('prefers permission bits over fs_access when reloading a hidden buffer', function()
+        local io_mod = require('mcp.builtin.editor.io')
+        local root = vim.fn.tempname()
+        vim.fn.mkdir(root, 'p')
+        local path = root .. '/hidden-reload-readonly.txt'
+        vim.fn.writefile({ 'before' }, path)
+
+        vim.cmd('edit ' .. vim.fn.fnameescape(path))
+        local target_buf = vim.api.nvim_get_current_buf()
+        vim.cmd('enew')
+
+        vim.fn.writefile({ 'after' }, path)
+
+        local original_open_win = vim.api.nvim_open_win
+        local original_getfperm = vim.fn.getfperm
+        local original_uv = vim.uv and vim.deepcopy(vim.uv) or nil
+        local original_loop = vim.loop and vim.deepcopy(vim.loop) or nil
+
+        vim.api.nvim_open_win = function(...)
+            error('window APIs unavailable')
+        end
+        vim.fn.getfperm = function(name)
+            if name == path then
+                return 'r--r--r--'
+            end
+            return original_getfperm(name)
+        end
+        if vim.uv and vim.uv.fs_access then
+            vim.uv.fs_access = function(name, mode)
+                if name == path and mode == 'W' then
+                    return true
+                end
+                return original_uv.fs_access(name, mode)
+            end
+        elseif vim.loop and vim.loop.fs_access then
+            vim.loop.fs_access = function(name, mode)
+                if name == path and mode == 'W' then
+                    return true
+                end
+                return original_loop.fs_access(name, mode)
+            end
+        end
+
+        local reload_err = io_mod.reload_buffer(target_buf)
+
+        vim.api.nvim_open_win = original_open_win
+        vim.fn.getfperm = original_getfperm
+        if original_uv then
+            vim.uv = original_uv
+        end
+        if original_loop then
+            vim.loop = original_loop
+        end
+
+        assert.is_nil(reload_err)
+        assert.are.same({ 'after' }, vim.api.nvim_buf_get_lines(target_buf, 0, -1, false))
+        assert.is_true(vim.bo[target_buf].readonly)
+
+        vim.bo[target_buf].readonly = false
+        vim.api.nvim_buf_delete(target_buf, { force = true })
+        vim.fn.delete(root, 'rf')
+    end)
+
+    it('falls back to fs_access when filewritable reports not writable for a hidden buffer', function()
+        local io_mod = require('mcp.builtin.editor.io')
+        local root = vim.fn.tempname()
+        vim.fn.mkdir(root, 'p')
+        local path = root .. '/hidden-reload-filewritable-fallback.txt'
+        vim.fn.writefile({ 'before' }, path)
+
+        vim.cmd('edit ' .. vim.fn.fnameescape(path))
+        local target_buf = vim.api.nvim_get_current_buf()
+        vim.cmd('enew')
+
+        vim.fn.writefile({ 'after' }, path)
+
+        local original_open_win = vim.api.nvim_open_win
+        local original_filewritable = vim.fn.filewritable
+        local original_getfperm = vim.fn.getfperm
+        local original_uv = vim.uv and vim.deepcopy(vim.uv) or nil
+        local original_loop = vim.loop and vim.deepcopy(vim.loop) or nil
+
+        vim.api.nvim_open_win = function(...)
+            error('window APIs unavailable')
+        end
+        vim.fn.filewritable = function(name)
+            if name == path then
+                return 0
+            end
+            return original_filewritable(name)
+        end
+        vim.fn.getfperm = function(name)
+            if name == path then
+                return 'r--r--r--'
+            end
+            return original_getfperm(name)
+        end
+        if vim.uv and vim.uv.fs_access then
+            vim.uv.fs_access = function(name, mode)
+                if name == path and mode == 'W' then
+                    return true
+                end
+                return original_uv.fs_access(name, mode)
+            end
+        elseif vim.loop and vim.loop.fs_access then
+            vim.loop.fs_access = function(name, mode)
+                if name == path and mode == 'W' then
+                    return true
+                end
+                return original_loop.fs_access(name, mode)
+            end
+        end
+
+        local reload_err = io_mod.reload_buffer(target_buf)
+
+        vim.api.nvim_open_win = original_open_win
+        vim.fn.filewritable = original_filewritable
+        vim.fn.getfperm = original_getfperm
+        if original_uv then
+            vim.uv = original_uv
+        end
+        if original_loop then
+            vim.loop = original_loop
+        end
+
+        assert.is_nil(reload_err)
+        assert.are.same({ 'after' }, vim.api.nvim_buf_get_lines(target_buf, 0, -1, false))
+        assert.is_false(vim.bo[target_buf].readonly)
+
+        vim.api.nvim_buf_delete(target_buf, { force = true })
+        vim.fn.delete(root, 'rf')
+    end)
+
+    it('refreshes file-backed buffer metadata when reloading a hidden buffer without window APIs', function()
+        local io_mod = require('mcp.builtin.editor.io')
+        local root = vim.fn.tempname()
+        vim.fn.mkdir(root, 'p')
+        local path = root .. '/hidden-reload-metadata.txt'
+        local handle = assert(io.open(path, 'wb'))
+        assert(handle:write('before\n'))
+        handle:close()
+
+        vim.cmd('edit ' .. vim.fn.fnameescape(path))
+        local target_buf = vim.api.nvim_get_current_buf()
+        vim.bo[target_buf].fileformat = 'dos'
+        vim.cmd('enew')
+
+        vim.fn.writefile({ 'after', 'value' }, path)
+
+        local original_open_win = vim.api.nvim_open_win
         vim.api.nvim_open_win = function(...)
             error('window APIs unavailable')
         end
@@ -6399,8 +7318,46 @@ describe('mcp', function()
 
         assert.is_nil(reload_err)
         assert.are.same({ 'after', 'value' }, vim.api.nvim_buf_get_lines(target_buf, 0, -1, false))
+        assert.are.equal('unix', vim.bo[target_buf].fileformat)
 
         vim.api.nvim_buf_delete(target_buf, { force = true })
+        vim.fn.delete(root, 'rf')
+    end)
+
+    it('reloads the hidden target buffer when reusing an existing fallback window', function()
+        local io_mod = require('mcp.builtin.editor.io')
+        local root = vim.fn.tempname()
+        vim.fn.mkdir(root, 'p')
+        local target_path = root .. '/hidden-reload-target.txt'
+        local visible_path = root .. '/hidden-reload-visible.txt'
+
+        vim.fn.writefile({ 'target-before' }, target_path)
+        vim.fn.writefile({ 'visible-before' }, visible_path)
+
+        vim.cmd('edit ' .. vim.fn.fnameescape(target_path))
+        local target_buf = vim.api.nvim_get_current_buf()
+        vim.cmd('edit ' .. vim.fn.fnameescape(visible_path))
+        local visible_buf = vim.api.nvim_get_current_buf()
+
+        vim.fn.writefile({ 'target-after' }, target_path)
+        vim.fn.writefile({ 'visible-after' }, visible_path)
+
+        local original_open_win = vim.api.nvim_open_win
+        vim.api.nvim_open_win = function(...)
+            error('window APIs unavailable')
+        end
+
+        local reload_err = io_mod.reload_buffer(target_buf)
+
+        vim.api.nvim_open_win = original_open_win
+
+        assert.is_nil(reload_err)
+        assert.are.same(visible_buf, vim.api.nvim_get_current_buf())
+        assert.are.same({ 'target-after' }, vim.api.nvim_buf_get_lines(target_buf, 0, -1, false))
+        assert.are.same({ 'visible-before' }, vim.api.nvim_buf_get_lines(visible_buf, 0, -1, false))
+
+        vim.api.nvim_buf_delete(target_buf, { force = true })
+        vim.api.nvim_buf_delete(visible_buf, { force = true })
         vim.fn.delete(root, 'rf')
     end)
 
@@ -6635,6 +7592,57 @@ describe('mcp', function()
         assert.are.equal(-32000, reload_err.code)
         assert.matches('failed to create temporary reload window: .*float unavailable', reload_err.message)
         assert.is_true(deleted)
+    end)
+
+    it('preserves binary content when reloading a hidden buffer without a window', function()
+        local io_mod = require('mcp.builtin.editor.io')
+        local path = vim.fn.tempname()
+        local handle = assert(io.open(path, 'wb'))
+        assert.truthy(handle:write('before\0after\n'))
+        handle:close()
+
+        vim.cmd('edit ' .. vim.fn.fnameescape(path))
+        local bufnr = vim.api.nvim_get_current_buf()
+        vim.cmd('enew')
+
+        local original_is_loaded = vim.api.nvim_buf_is_loaded
+        local original_buf_call = vim.api.nvim_buf_call
+        local original_win_findbuf = vim.fn.win_findbuf
+        local original_tabpage_list_wins = vim.api.nvim_tabpage_list_wins
+
+        vim.api.nvim_buf_is_loaded = function(target)
+            if target == bufnr then
+                return true
+            end
+            return original_is_loaded(target)
+        end
+        vim.api.nvim_buf_call = function(target, callback)
+            if target == bufnr then
+                return callback()
+            end
+            return original_buf_call(target, callback)
+        end
+        vim.fn.win_findbuf = function(target)
+            if target == bufnr then
+                return {}
+            end
+            return original_win_findbuf(target)
+        end
+        vim.api.nvim_tabpage_list_wins = function(_)
+            return {}
+        end
+
+        local reload_err = io_mod.reload_buffer(bufnr)
+
+        vim.api.nvim_buf_is_loaded = original_is_loaded
+        vim.api.nvim_buf_call = original_buf_call
+        vim.fn.win_findbuf = original_win_findbuf
+        vim.api.nvim_tabpage_list_wins = original_tabpage_list_wins
+
+        assert.is_nil(reload_err)
+        assert.are.same(vim.fn.readfile(path, 'b'), vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+        os.remove(path)
     end)
 
     it('keeps write and apply-diff current-buffer tools distinct', function()
@@ -7222,6 +8230,320 @@ describe('mcp', function()
         assert.is_false(vim.tbl_contains(template_names, 'custom-template'))
         assert.is_false(vim.tbl_contains(prompt_names, 'custom-prompt'))
     end)
+
+    it('rejects HTTP requests without the configured bearer token', function()
+        local plugin = require('mcp')
+        local http_server = require('mcp.http_server')
+        local ok, err = xpcall(function()
+            plugin.setup({
+                transport = 'http',
+                http_host = '127.0.0.1',
+                http_port = 0,
+                http_token = 'secret-token',
+            })
+            local start_ok, start_err = http_server.start()
+            assert.is_true(start_ok)
+            assert.is_nil(start_err)
+            local writes = {}
+            local read_cb
+            local client = {
+                read_start = function(_, cb)
+                    read_cb = cb
+                    return true
+                end,
+                write = function(_, payload, cb)
+                    table.insert(writes, payload)
+                    if cb ~= nil then
+                        cb()
+                    end
+                end,
+                read_stop = function() end,
+                close = function() end,
+                is_closing = function()
+                    return false
+                end,
+            }
+
+            http_server._start_client_read(client)
+            read_cb(nil, table.concat({
+                'POST /mcp HTTP/1.1',
+                'Host: localhost',
+                'Content-Type: application/json',
+                'Content-Length: 51',
+                '',
+                '{"jsonrpc":"2.0","id":99,"method":"tools/list"}',
+            }, '\r\n') .. '\r\n\r\n')
+
+            vim.wait(1000, function()
+                return writes[1] ~= nil
+            end)
+            assert.is_not_nil(writes[1])
+            assert.truthy(writes[1]:find('401 Unauthorized', 1, true) ~= nil)
+            assert.truthy(writes[1]:find('WWW-Authenticate: Bearer', 1, true) ~= nil)
+            assert.truthy(writes[1]:find('Access-Control-Allow-Origin:', 1, true) == nil)
+            assert.truthy(
+                writes[1]:find('Access-Control-Allow-Headers: Authorization, Content-Type, Accept', 1, true) ~= nil
+            )
+        end, function(message)
+            return debug.traceback(message, 2)
+        end)
+        plugin.reset()
+        if not ok then
+            error(err)
+        end
+    end)
+
+    it('accepts authenticated HTTP requests and enables CORS for matching origins', function()
+        local plugin = require('mcp')
+        local http_server = require('mcp.http_server')
+        local ok, err = xpcall(function()
+            plugin.setup({
+                transport = 'http',
+                http_host = '127.0.0.1',
+                http_port = 0,
+                http_token = 'secret-token',
+            })
+            local start_ok, start_err = http_server.start()
+            assert.is_true(start_ok)
+            assert.is_nil(start_err)
+            local writes = {}
+            local read_cb
+            local client = {
+                read_start = function(_, cb)
+                    read_cb = cb
+                    return true
+                end,
+                write = function(_, payload, cb)
+                    table.insert(writes, payload)
+                    if cb ~= nil then
+                        cb()
+                    end
+                end,
+                read_stop = function() end,
+                close = function() end,
+                is_closing = function()
+                    return false
+                end,
+            }
+
+            http_server._start_client_read(client)
+            read_cb(nil, table.concat({
+                'POST /mcp HTTP/1.1',
+                'Host: localhost',
+                'Origin: http://127.0.0.1:3000',
+                'Authorization: Bearer secret-token',
+                'Content-Type: application/json',
+                'Content-Length: 51',
+                '',
+                '{"jsonrpc":"2.0","id":99,"method":"tools/list"}',
+            }, '\r\n') .. '\r\n\r\n')
+
+            vim.wait(1000, function()
+                return writes[1] ~= nil
+            end)
+            assert.is_not_nil(writes[1])
+            assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
+            assert.truthy(writes[1]:find('Access-Control-Allow-Origin: http://127.0.0.1:3000', 1, true) ~= nil)
+        end, function(message)
+            return debug.traceback(message, 2)
+        end)
+        plugin.reset()
+        if not ok then
+            error(err)
+        end
+    end)
+
+    it('accepts unauthenticated HTTP requests when no non-empty bearer token is configured', function()
+        local plugin = require('mcp')
+        local http_server = require('mcp.http_server')
+        local ok, err = xpcall(function()
+            plugin.setup({
+                transport = 'http',
+                http_host = '127.0.0.1',
+                http_port = 0,
+                http_token = '',
+            })
+            local start_ok, start_err = http_server.start()
+            assert.is_true(start_ok)
+            assert.is_nil(start_err)
+            local writes = {}
+            local read_cb
+            local client = {
+                read_start = function(_, cb)
+                    read_cb = cb
+                    return true
+                end,
+                write = function(_, payload, cb)
+                    table.insert(writes, payload)
+                    if cb ~= nil then
+                        cb()
+                    end
+                end,
+                read_stop = function() end,
+                close = function() end,
+                is_closing = function()
+                    return false
+                end,
+            }
+
+            http_server._start_client_read(client)
+            read_cb(nil, table.concat({
+                'POST /mcp HTTP/1.1',
+                'Host: localhost',
+                'Content-Type: application/json',
+                'Content-Length: 51',
+                '',
+                '{"jsonrpc":"2.0","id":99,"method":"tools/list"}',
+            }, '\r\n') .. '\r\n\r\n')
+
+            vim.wait(1000, function()
+                return writes[1] ~= nil
+            end)
+            assert.is_not_nil(writes[1])
+            assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
+        end, function(message)
+            return debug.traceback(message, 2)
+        end)
+        plugin.reset()
+        if not ok then
+            error(err)
+        end
+    end)
+
+
+
+    it('allows authenticated CORS preflight requests without requiring the bearer token', function()
+        local plugin = require('mcp')
+        local http_server = require('mcp.http_server')
+        local ok, err = xpcall(function()
+            plugin.setup({
+                transport = 'http',
+                http_host = '127.0.0.1',
+                http_port = 0,
+                http_token = 'secret-token',
+            })
+            local start_ok, start_err = http_server.start()
+            assert.is_true(start_ok)
+            assert.is_nil(start_err)
+            local writes = {}
+            local read_cb
+            local client = {
+                read_start = function(_, cb)
+                    read_cb = cb
+                    return true
+                end,
+                write = function(_, payload, cb)
+                    table.insert(writes, payload)
+                    if cb ~= nil then
+                        cb()
+                    end
+                end,
+                read_stop = function() end,
+                close = function() end,
+                is_closing = function()
+                    return false
+                end,
+            }
+
+            http_server._start_client_read(client)
+            read_cb(
+                nil,
+                table.concat({
+                    'OPTIONS /mcp HTTP/1.1',
+                    'Host: localhost',
+                    'Origin: http://127.0.0.1:3000',
+                    'Access-Control-Request-Method: POST',
+                    'Access-Control-Request-Headers: Authorization, Content-Type',
+                    'Content-Length: 0',
+                    '',
+                    '',
+                }, '\r\n')
+            )
+
+            vim.wait(1000, function()
+                return writes[1] ~= nil
+            end)
+            assert.is_not_nil(writes[1])
+            assert.truthy(writes[1]:find('204 No Content', 1, true) ~= nil)
+            assert.truthy(writes[1]:find('Access-Control-Allow-Origin: http://127.0.0.1:3000', 1, true) ~= nil)
+            assert.truthy(
+                writes[1]:find('Access-Control-Allow-Headers: Authorization, Content-Type, Accept', 1, true) ~= nil
+            )
+        end, function(message)
+            return debug.traceback(message, 2)
+        end)
+        plugin.reset()
+        if not ok then
+            error(err)
+        end
+    end)
+
+    it(
+        'accepts CORS preflight requests with an invalid Authorization header when an HTTP token is configured and authorization is declared',
+        function()
+            local plugin = require('mcp')
+            local http_server = require('mcp.http_server')
+            local ok, err = xpcall(function()
+                plugin.setup({
+                    transport = 'http',
+                    http_host = '127.0.0.1',
+                    http_port = 0,
+                    http_token = 'secret-token',
+                })
+                local start_ok, start_err = http_server.start()
+                assert.is_true(start_ok)
+                assert.is_nil(start_err)
+                local writes = {}
+                local read_cb
+                local client = {
+                    read_start = function(_, cb)
+                        read_cb = cb
+                        return true
+                    end,
+                    write = function(_, payload, cb)
+                        table.insert(writes, payload)
+                        if cb ~= nil then
+                            cb()
+                        end
+                    end,
+                    read_stop = function() end,
+                    close = function() end,
+                    is_closing = function()
+                        return false
+                    end,
+                }
+
+                http_server._start_client_read(client)
+                read_cb(
+                    nil,
+                    table.concat({
+                        'OPTIONS /mcp HTTP/1.1',
+                        'Host: localhost',
+                        'Origin: http://127.0.0.1:3000',
+                        'Access-Control-Request-Method: POST',
+                        'Access-Control-Request-Headers: Authorization, Content-Type',
+                        'Authorization: Bearer wrong-token',
+                        'Content-Length: 0',
+                        '',
+                        '',
+                    }, '\r\n')
+                )
+
+                vim.wait(1000, function()
+                    return writes[1] ~= nil
+                end)
+                assert.is_not_nil(writes[1])
+                assert.truthy(writes[1]:find('204 No Content', 1, true) ~= nil)
+                assert.truthy(writes[1]:find('Access-Control-Allow-Origin: http://127.0.0.1:3000', 1, true) ~= nil)
+            end, function(message)
+                return debug.traceback(message, 2)
+            end)
+            plugin.reset()
+            if not ok then
+                error(err)
+            end
+        end
+    )
 
     it('accepts requests without an accept header', function()
         local plugin = require('mcp')
@@ -7840,9 +9162,6 @@ it('re-registers built-in neovim server after reset and setup', function()
     assert.is_false(vim.tbl_contains(tool_names, 'neovim/custom/ping'))
 end)
 
-
-
-
 it('does not start HTTP from start_all when HTTP remains on the default ephemeral port', function()
     local plugin = require('mcp')
     local http_server = require('mcp.http_server')
@@ -7885,7 +9204,7 @@ it('starts HTTP from start_all when an explicit HTTP port is configured', functi
     plugin.reset()
 end)
 
-it('starts only HTTP from start when HTTP transport is requested', function()
+it('starts socket and HTTP from start when HTTP transport is requested and sockets are supported', function()
     local plugin = require('mcp')
     local server = require('mcp.server')
     local start_socket_calls = 0
@@ -7915,7 +9234,7 @@ it('starts only HTTP from start when HTTP transport is requested', function()
         local started, start_err = plugin.start('http')
         assert.is_true(started)
         assert.is_nil(start_err)
-        assert.are.equal(0, start_socket_calls)
+        assert.are.equal(1, start_socket_calls)
     end, debug.traceback)
 
     server.start_http = original_start_http
@@ -8095,6 +9414,96 @@ it('closes the accepted startup probe client immediately', function()
     assert.is_true(accepted_client_closed)
 end)
 
+it('restarts a pending ephemeral HTTP listener when the configured host changes', function()
+    local plugin = require('mcp')
+    local http_server = require('mcp.http_server')
+    local original_new_tcp = vim.uv.new_tcp
+    local bind_calls = {}
+    local created = 0
+    local first_server
+
+    vim.uv.new_tcp = function()
+        created = created + 1
+
+        if created == 1 or created == 4 then
+            local closed = false
+            local tcp = {
+                bind = function(_, host, port)
+                    table.insert(bind_calls, { host = host, port = port })
+                    return 0
+                end,
+                getsockname = function()
+                    local last = bind_calls[#bind_calls]
+                    return { ip = last.host, port = 0 }
+                end,
+                listen = function()
+                    return nil
+                end,
+                is_closing = function()
+                    return closed
+                end,
+                close = function()
+                    closed = true
+                end,
+            }
+
+            if created == 1 then
+                first_server = tcp
+            end
+
+            return tcp
+        end
+
+        local closed = false
+        return {
+            connect = function()
+                return true
+            end,
+            is_closing = function()
+                return closed
+            end,
+            close = function()
+                closed = true
+            end,
+        }
+    end
+
+    local ok, err = xpcall(function()
+        plugin.setup({
+            transport = 'http',
+            http_host = '127.0.0.1',
+            http_port = 0,
+        })
+
+        local started, start_err = http_server.start()
+        assert.is_true(started)
+        assert.is_nil(start_err)
+
+        plugin.setup({
+            transport = 'http',
+            http_host = '127.0.0.2',
+            http_port = 0,
+        })
+
+        started, start_err = http_server.start()
+        assert.is_true(started)
+        assert.is_nil(start_err)
+
+        assert.are.equal(2, #bind_calls)
+        assert.are.same({ host = '127.0.0.1', port = 0 }, bind_calls[1])
+        assert.are.same({ host = '127.0.0.2', port = 0 }, bind_calls[2])
+        assert.is_not_nil(first_server)
+        assert.is_true(first_server:is_closing())
+    end, debug.traceback)
+
+    vim.uv.new_tcp = original_new_tcp
+    plugin.reset()
+
+    if not ok then
+        error(err)
+    end
+end)
+
 it('reports pending startup from fast-event contexts', function()
     local http_server = require('mcp.http_server')
     local original_in_fast_event = vim.in_fast_event
@@ -8187,6 +9596,88 @@ it('treats repeated start calls as idempotent while startup is pending', functio
     assert.is_false(pending_client_closed)
 end)
 
+it('restarts a pending HTTP listener when the endpoint changes', function()
+    local plugin = require('mcp')
+    local http_server = require('mcp.http_server')
+    local original_new_tcp = vim.uv.new_tcp
+    local original_in_fast_event = vim.in_fast_event
+    local closed_listeners = 0
+    local created = 0
+
+    vim.in_fast_event = function()
+        return true
+    end
+
+    vim.uv.new_tcp = function()
+        created = created + 1
+        if created == 1 or created == 3 then
+            local closed = false
+            return {
+                bind = function()
+                    return 0
+                end,
+                getsockname = function()
+                    return { ip = '127.0.0.1', port = created == 1 and 9876 or 9877 }
+                end,
+                listen = function()
+                    return nil
+                end,
+                accept = function()
+                    return 0
+                end,
+                is_closing = function()
+                    return closed
+                end,
+                close = function()
+                    if not closed then
+                        closed = true
+                        closed_listeners = closed_listeners + 1
+                    end
+                end,
+            }
+        end
+
+        local closed = false
+        return {
+            connect = function()
+                return true
+            end,
+            is_closing = function()
+                return closed
+            end,
+            close = function()
+                closed = true
+            end,
+        }
+    end
+
+    plugin.setup({
+        transport = 'http',
+        http_host = '127.0.0.1',
+        http_port = 9876,
+    })
+
+    local ok, err = http_server.start()
+    assert.is_false(ok)
+    assert.are.equal('http server startup pending', err)
+
+    plugin.setup({
+        transport = 'http',
+        http_host = '127.0.0.1',
+        http_port = 9877,
+    })
+
+    local restarted, restart_err = http_server.start()
+
+    vim.uv.new_tcp = original_new_tcp
+    vim.in_fast_event = original_in_fast_event
+    http_server.stop()
+
+    assert.is_true(restarted)
+    assert.is_nil(restart_err)
+    assert.are.equal(1, closed_listeners)
+end)
+
 it('reports asynchronous HTTP listen startup failures to the caller', function()
     local http_server = require('mcp.http_server')
     local original_new_tcp = vim.uv.new_tcp
@@ -8244,6 +9735,141 @@ it('reports asynchronous HTTP listen startup failures to the caller', function()
     assert.is_not_nil(listen_callback)
 end)
 
+it('probes IPv4 wildcard listeners through loopback', function()
+    local http_server = require('mcp.http_server')
+    local original_new_tcp = vim.uv.new_tcp
+    local listener_closed = false
+    local probe_closed = false
+    local created = 0
+    local connected_host
+    local connected_port
+
+    vim.uv.new_tcp = function()
+        created = created + 1
+        if created == 1 then
+            return {
+                bind = function()
+                    return 0
+                end,
+                getsockname = function()
+                    return { ip = '0.0.0.0', port = 9876 }
+                end,
+                listen = function()
+                    return nil
+                end,
+                accept = function()
+                    return 0
+                end,
+                is_closing = function()
+                    return listener_closed
+                end,
+                close = function()
+                    listener_closed = true
+                end,
+            }
+        end
+
+        return {
+            connect = function(_, host, port, cb)
+                connected_host = host
+                connected_port = port
+                cb(nil)
+                return true
+            end,
+            is_closing = function()
+                return probe_closed
+            end,
+            close = function()
+                probe_closed = true
+            end,
+        }
+    end
+
+    local ok, err = xpcall(function()
+        local started, start_err = http_server.start()
+
+        assert.is_true(started)
+        assert.is_nil(start_err)
+        assert.are.equal('127.0.0.1', connected_host)
+        assert.are.equal(9876, connected_port)
+        assert.is_true(probe_closed)
+    end, debug.traceback)
+
+    vim.uv.new_tcp = original_new_tcp
+    http_server.stop()
+
+    if not ok then
+        error(err)
+    end
+end)
+
+it('probes IPv6 wildcard listeners through loopback', function()
+    local http_server = require('mcp.http_server')
+    local original_new_tcp = vim.uv.new_tcp
+    local listener_closed = false
+    local probe_closed = false
+    local created = 0
+    local connected_host
+    local connected_port
+
+    vim.uv.new_tcp = function()
+        created = created + 1
+        if created == 1 then
+            return {
+                bind = function()
+                    return 0
+                end,
+                getsockname = function()
+                    return { ip = '0:0:0:0:0:0:0:0', port = 9876 }
+                end,
+                listen = function()
+                    return nil
+                end,
+                accept = function()
+                    return 0
+                end,
+                is_closing = function()
+                    return listener_closed
+                end,
+                close = function()
+                    listener_closed = true
+                end,
+            }
+        end
+
+        return {
+            connect = function(_, host, port, cb)
+                connected_host = host
+                connected_port = port
+                cb(nil)
+                return true
+            end,
+            is_closing = function()
+                return probe_closed
+            end,
+            close = function()
+                probe_closed = true
+            end,
+        }
+    end
+
+    local ok, err = xpcall(function()
+        local started, start_err = http_server.start()
+
+        assert.is_true(started)
+        assert.is_nil(start_err)
+        assert.are.equal('::1', connected_host)
+        assert.are.equal(9876, connected_port)
+        assert.is_true(probe_closed)
+    end, debug.traceback)
+
+    vim.uv.new_tcp = original_new_tcp
+    http_server.stop()
+
+    if not ok then
+        error(err)
+    end
+end)
 
 it('drains pending HTTP clients when the startup probe fails', function()
     local http_server = require('mcp.http_server')
@@ -8398,7 +10024,7 @@ it('closes the tcp handle when HTTP bind fails', function()
     assert.are.equal(1, close_calls)
 end)
 
-it('reports write success even if buffer reload warns', function()
+it('returns a warning when buffer reload fails after writing', function()
     local io_mod = require('mcp.builtin.editor.io')
     local tmp = vim.fn.tempname()
     local bufnr = vim.api.nvim_create_buf(true, false)
@@ -8421,12 +10047,14 @@ it('reports write success even if buffer reload warns', function()
     vim.api.nvim_buf_delete(bufnr, { force = true })
     vim.fn.delete(tmp)
 
+    assert.are.same({
+        path = tmp,
+        reloaded_buffer = false,
+    }, result)
     assert.is_nil(err)
     assert.are.same({
         code = -32000,
         message = 'reload failed',
     }, warning)
-    assert.are.equal(tmp, result.path)
-    assert.is_true(result.reloaded_buffer)
     assert.are.equal('hello world', disk)
 end)

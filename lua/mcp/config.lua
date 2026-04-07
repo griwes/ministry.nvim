@@ -5,6 +5,7 @@ local defaults = {
     transport = 'socket',
     http_host = '127.0.0.1',
     http_port = 0,
+    http_token = nil,
     enable_terminal_tools = false,
     auto_start = true,
 }

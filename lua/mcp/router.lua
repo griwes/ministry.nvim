@@ -18,6 +18,30 @@ local function extract_server_and_tool(request)
     return server, tool
 end
 
+---@param name string
+---@return string?, string?
+local function split_qualified_tool_name(name)
+    if type(name) ~= 'string' then
+        return nil, nil
+    end
+
+    local server_name, tool_name = name:match('^([^/]+)/(.+)$')
+    return server_name, tool_name
+end
+
+---@param name string
+---@param server string
+---@param tool string
+---@return boolean
+local function split_routing_matches_name(name, server, tool)
+    local name_server, name_tool = split_qualified_tool_name(name)
+    if name_server == nil or name_tool == nil then
+        return false
+    end
+
+    return name_server == server and (name_tool == tool or name_tool == normalize_split_tool_name(tool))
+end
+
 local function success_response(id, result)
     return {
         jsonrpc = '2.0',
@@ -81,10 +105,20 @@ end
 
 ---@param result any
 ---@return table
-
 local function resource_read_result(result)
     if type(result) == 'table' and result.contents ~= nil then
-        return result
+        local normalized = vim.deepcopy(result)
+        local contents = normalized.contents
+        if type(contents) == 'table' and vim.islist(contents) == false then
+            contents = { contents }
+        end
+
+        if type(contents) ~= 'table' or vim.islist(contents) == false then
+            error('mcp.nvim resource read must return contents as a list')
+        end
+
+        normalized.contents = contents
+        return normalized
     end
 
     local text
@@ -105,30 +139,42 @@ local function resource_read_result(result)
 end
 
 ---@param result any
+---@param prompt table
 ---@return table
-local function prompt_get_result(result)
+local function prompt_get_result(result, prompt)
+    local normalized
     if type(result) == 'table' then
-        return result
-    end
-
-    return {
-        messages = {
-            {
-                role = 'user',
-                content = {
-                    type = 'text',
-                    text = type(result) == 'string' and result or vim.json.encode(result or {}),
+        normalized = vim.deepcopy(result)
+    else
+        normalized = {
+            messages = {
+                {
+                    role = 'user',
+                    content = {
+                        type = 'text',
+                        text = type(result) == 'string' and result or vim.json.encode(result or {}),
+                    },
                 },
             },
-        },
-    }
-end
+        }
+    end
 
+    normalized.name = prompt.name
+    normalized.description = prompt.description
+
+    return normalized
+end
 
 local function json_safe_warning_value(value, seen)
     local value_type = type(value)
 
-    if value == vim.NIL or value_type == 'nil' or value_type == 'boolean' or value_type == 'number' or value_type == 'string' then
+    if
+        value == vim.NIL
+        or value_type == 'nil'
+        or value_type == 'boolean'
+        or value_type == 'number'
+        or value_type == 'string'
+    then
         return value
     end
 
@@ -309,12 +355,15 @@ function M.handle_request(method, params, id, context)
             return error_response(id, -32602, err)
         end
 
-        local handler_request = vim.tbl_extend('force', {}, request, {
-            uri = resource.uri,
-            namespaced_uri = request.uri,
-        })
+        local handler_request = vim.deepcopy(request)
+        handler_request.uri = resource.uri
+        handler_request.namespaced_uri = request.uri
 
-        local result, handler_err = resource.handler(handler_request, context or {})
+        local ok, result, handler_err = pcall(resource.handler, handler_request, context or {})
+
+        if not ok then
+            return error_response(id, -32000, result or 'mcp.nvim resource read failed')
+        end
 
         if handler_err ~= nil then
             return error_response(
@@ -346,18 +395,21 @@ function M.handle_request(method, params, id, context)
             return error_response(id, -32602, err)
         end
 
-        local handler_request = vim.tbl_extend('force', {}, request, {
-            name = prompt.name,
-            namespaced_name = request.name,
-        })
+        local handler_request = vim.deepcopy(request)
+        handler_request.name = prompt.name
+        handler_request.namespaced_name = request.name
 
-        local result, handler_err = prompt.handler(handler_request, context or {})
+        local ok, result, handler_err = pcall(prompt.handler, handler_request, context or {})
+
+        if not ok then
+            return error_response(id, -32000, result or 'mcp.nvim prompt get failed')
+        end
 
         if handler_err ~= nil then
             return error_response(id, handler_err.code or -32000, handler_err.message or 'mcp.nvim prompt get failed')
         end
 
-        return success_response(id, prompt_get_result(result))
+        return success_response(id, prompt_get_result(result, prompt))
     end
 
     if method == 'tools/call' then
@@ -369,11 +421,31 @@ function M.handle_request(method, params, id, context)
 
         if tool_name == nil and server_name ~= nil and split_tool_name ~= nil then
             used_split_tool_routing = true
-            split_tool_name = normalize_split_tool_name(split_tool_name)
-            if is_already_qualified_tool_name(split_tool_name, server_name) then
-                tool_name = split_tool_name
+            local exact_tool_name = split_tool_name
+            local exact_namespaced_tool_name
+            if is_already_qualified_tool_name(exact_tool_name, server_name) then
+                exact_namespaced_tool_name = exact_tool_name
             else
-                tool_name = string.format('%s/%s', server_name, split_tool_name)
+                exact_namespaced_tool_name = string.format('%s/%s', server_name, exact_tool_name)
+            end
+
+            local exact_tool = registry.find_tool(exact_namespaced_tool_name, { allow_flattened_fallback = false })
+            if exact_tool ~= nil then
+                tool_name = exact_namespaced_tool_name
+            else
+                split_tool_name = normalize_split_tool_name(split_tool_name)
+                if is_already_qualified_tool_name(split_tool_name, server_name) then
+                    tool_name = split_tool_name
+                else
+                    tool_name = string.format('%s/%s', server_name, split_tool_name)
+                end
+            end
+        elseif tool_name ~= nil and (server_name ~= nil or split_tool_name ~= nil) then
+            if server_name == nil or split_tool_name == nil then
+                return error_response(id, -32602, 'Missing tool identifier')
+            end
+            if not split_routing_matches_name(tool_name, server_name, split_tool_name) then
+                return error_response(id, -32602, 'Conflicting tool identifiers')
             end
         end
 
@@ -386,9 +458,12 @@ function M.handle_request(method, params, id, context)
         end
 
         if used_split_tool_routing then
-            local _, lookup_err = registry.find_tool(tool_name)
+            local tool, lookup_err = registry.find_tool(tool_name, { allow_flattened_fallback = false })
             if lookup_err ~= nil then
                 return error_response(id, -32602, lookup_err)
+            end
+            if tool ~= nil and tool.name ~= nil and not is_already_qualified_tool_name(tool_name, server_name) then
+                tool_name = string.format('%s/%s', server_name, tool.name)
             end
         end
 

@@ -36,5 +36,6 @@ Example local `lazy.nvim` spec:
   - current-buffer operations are also exposed via `neovim/editor/diff_current_buffer`, `neovim/editor/write_current_buffer`, and `neovim/editor/apply_diff_current_buffer`
 - built-in editor surfaces do not expose current-buffer resources or prompts
 - the HTTP endpoint returns `204 No Content` with an empty body for JSON-RPC notifications, including notification-only batches
+- HTTP transport requires `Authorization: Bearer <token>` on application requests; browser CORS preflight `OPTIONS` requests are allowed without auth, while non-preflight `OPTIONS` requests still require the bearer token when `http_token` is set
 
 - terminal tools execute host commands via Neovim and are disabled by default for safety

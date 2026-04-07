@@ -23,6 +23,11 @@ local startup_pending = false
 local clients = {}
 ---@type uv_tcp_t[]
 local pending_clients = {}
+local session_http_token = nil
+
+local function has_session_http_token()
+    return type(session_http_token) == 'string' and vim.trim(session_http_token) ~= ''
+end
 
 local function deepcopy(value)
     return vim.deepcopy(value)
@@ -55,6 +60,7 @@ local reason_phrases = {
     [200] = 'OK',
     [204] = 'No Content',
     [400] = 'Bad Request',
+    [401] = 'Unauthorized',
     [404] = 'Not Found',
     [405] = 'Method Not Allowed',
     [406] = 'Not Acceptable',
@@ -89,7 +95,7 @@ local function send_response(client, status, body, headers, keep_alive, http_ver
         string.format('%s %d %s', response_version, status, reason_phrases[status] or 'Unknown'),
     }
 
-    if allows_body then
+    if allows_body or keep_alive then
         table.insert(payload, string.format('Content-Length: %d', #response_body))
     end
 
@@ -200,6 +206,53 @@ local function is_valid_ipv6_literal(value)
     return total_groups == 8
 end
 
+local function parse_ipv6_origin_host(host)
+    if type(host) ~= 'string' or host == '' then
+        return nil
+    end
+
+    local address = host
+    local zone_id = host:match('^(.-)%%25([%w%.%-%_%~]+)$')
+    if zone_id ~= nil then
+        address = host:match('^(.-)%%25')
+        if address == nil or address == '' then
+            return nil
+        end
+    elseif host:find('%%', 1, true) ~= nil then
+        return nil
+    end
+
+    if not is_valid_ipv6_literal(address) then
+        return nil
+    end
+
+    return {
+        address = address,
+        zone_id = zone_id,
+    }
+end
+
+local function constant_time_equals(left, right)
+    if type(left) ~= 'string' or type(right) ~= 'string' then
+        return false
+    end
+
+    local left_length = #left
+    local right_length = #right
+    local max_length = math.max(left_length, right_length)
+    local diff = left_length == right_length and 0 or 1
+
+    for index = 1, max_length do
+        local left_byte = index <= left_length and left:byte(index) or 0
+        local right_byte = index <= right_length and right:byte(index) or 0
+        if left_byte ~= right_byte then
+            diff = 1
+        end
+    end
+
+    return diff == 0
+end
+
 local function is_localhost_origin_host(host)
     if type(host) ~= 'string' or host == '' then
         return false
@@ -213,8 +266,9 @@ local function is_localhost_origin_host(host)
         return host:match('^127%.') ~= nil
     end
 
-    if is_valid_ipv6_literal(host) then
-        local normalized_host = host:lower()
+    local parsed_ipv6 = parse_ipv6_origin_host(host)
+    if parsed_ipv6 ~= nil then
+        local normalized_host = parsed_ipv6.address:lower()
         if normalized_host == '::1' then
             return true
         end
@@ -230,10 +284,7 @@ local function is_localhost_origin_host(host)
                 local upper = tonumber(first_group, 16)
                 local lower = tonumber(second_group, 16)
                 if upper ~= nil and lower ~= nil then
-                    return math.floor(upper / 256) == 127
-                        and upper % 256 == 0
-                        and lower >= 0
-                        and lower <= 65535
+                    return math.floor(upper / 256) == 127 and upper % 256 == 0 and lower >= 0 and lower <= 65535
                 end
             end
         end
@@ -256,6 +307,10 @@ local function normalize_origin_host(host)
 end
 
 local function cors_allow_origin(request)
+    if not has_session_http_token() then
+        return nil
+    end
+
     local origin = request and request.headers and request.headers.origin
 
     if type(origin) ~= 'string' then
@@ -295,7 +350,7 @@ local function cors_allow_origin(request)
         end
 
         host = host:sub(2, -2)
-        if not is_valid_ipv6_literal(host) then
+        if parse_ipv6_origin_host(host) == nil then
             return nil
         end
     else
@@ -324,14 +379,32 @@ local function cors_allow_origin(request)
 
     local normalized_host = normalize_origin_host(host)
     local normalized_allowed_host = normalize_origin_host(allowed_host)
+    local parsed_origin_ipv6 = parse_ipv6_origin_host(normalized_host)
+    local parsed_allowed_ipv6 = parse_ipv6_origin_host(normalized_allowed_host)
 
     local allow_localhost_origin = normalized_allowed_host == '0.0.0.0'
         or normalized_allowed_host == '::'
-        or is_localhost_origin_host(normalized_allowed_host)
+        or normalized_allowed_host:lower() == 'localhost'
 
     if allow_localhost_origin then
         if not is_localhost_origin_host(normalized_host) then
             return nil
+        end
+    elseif parsed_origin_ipv6 ~= nil and parsed_allowed_ipv6 ~= nil then
+        if parsed_origin_ipv6.address:lower() ~= parsed_allowed_ipv6.address:lower() then
+            return nil
+        end
+
+        local origin_zone_id = parsed_origin_ipv6.zone_id
+        local allowed_zone_id = parsed_allowed_ipv6.zone_id
+        if origin_zone_id ~= nil or allowed_zone_id ~= nil then
+            if origin_zone_id == nil or allowed_zone_id == nil then
+                return nil
+            end
+
+            if origin_zone_id:lower() ~= allowed_zone_id:lower() then
+                return nil
+            end
         end
     elseif normalized_host:lower() ~= normalized_allowed_host:lower() then
         return nil
@@ -343,7 +416,7 @@ end
 local function cors_headers(request)
     local headers = {
         'Access-Control-Allow-Methods: POST, OPTIONS',
-        'Access-Control-Allow-Headers: Content-Type, Accept',
+        'Access-Control-Allow-Headers: Authorization, Content-Type, Accept',
         'Access-Control-Max-Age: 86400',
     }
     local origin = cors_allow_origin(request)
@@ -377,6 +450,29 @@ local function cors_headers_from_buffer(buffer)
     end
 
     return cors_headers(request)
+end
+
+local function probe_host_for(bound, configured)
+    local host = bound or configured
+
+    if host == nil then
+        return host
+    end
+
+    if host == '0.0.0.0' then
+        return '127.0.0.1'
+    end
+
+    local normalized = host
+    if normalized:sub(1, 1) == '[' and normalized:sub(-1) == ']' then
+        normalized = normalized:sub(2, -2)
+    end
+
+    if normalized == '::' or normalized == '0:0:0:0:0:0:0:0' then
+        return '::1'
+    end
+
+    return host
 end
 
 local function send_json_response(client, status, body, keep_alive, http_version, content_type, extra_headers)
@@ -467,19 +563,31 @@ local function parse_request(raw)
     end
 
     local header_start, header_finish = raw:find('\r\n\r\n', 1, true)
+    local newline = '\r\n'
 
     if header_start == nil or header_finish == nil then
-        if raw:find('\n\n', 1, true) ~= nil then
-            return nil, nil, 'invalid http framing'
+        header_start, header_finish = raw:find('\n\n', 1, true)
+        if header_start ~= nil then
+            local lf_head = raw:sub(1, header_start - 1)
+            if lf_head:find('\r', 1, true) ~= nil then
+                return nil, nil, 'invalid http framing'
+            end
         end
+        newline = '\n'
+    end
 
+    if header_start == nil or header_finish == nil then
         return nil
     end
 
     local head = raw:sub(1, header_start - 1)
     local body_start = header_finish + 1
 
-    if head:find('[^\r]\n', 1) ~= nil then
+    if newline == '\r\n' then
+        if head:find('[^\r]\n', 1) ~= nil then
+            return nil, nil, 'invalid http framing'
+        end
+    elseif head:find('\r', 1, true) ~= nil then
         return nil, nil, 'invalid http framing'
     end
 
@@ -509,6 +617,10 @@ local function parse_request(raw)
         if first_header then
             first_header = false
         else
+            if line:match('^[ \t]') ~= nil then
+                return nil, nil, 'invalid folded header'
+            end
+
             local name, value = line:match('^([^:]+):%s*(.*)$')
 
             if name ~= nil then
@@ -570,7 +682,10 @@ local function parse_request(raw)
         return nil
     end
 
-    local body = raw:sub(body_start, body_start + content_length - 1)
+    local body = ''
+    if content_length > 0 then
+        body = raw:sub(body_start, body_start + content_length - 1)
+    end
 
     return {
         method = method,
@@ -581,6 +696,26 @@ local function parse_request(raw)
         connection_reusable = true,
     },
         body_start + content_length - 1
+end
+
+local function request_bearer_token(request)
+    local authorization = request.headers.authorization
+
+    if type(authorization) ~= 'string' then
+        return nil
+    end
+
+    local token = authorization:match('^[Bb][Ee][Aa][Rr][Ee][Rr]%s+(.+)$')
+    if token == nil then
+        return nil
+    end
+
+    token = vim.trim(token)
+    if token == '' then
+        return nil
+    end
+
+    return token
 end
 
 local function snapshot_request(request)
@@ -709,7 +844,8 @@ local function content_type_is_json(content_type)
 
     local media_type = vim.trim(normalized_content_type:match('^[^;]+') or '')
 
-    return media_type == 'application/json' or media_type == 'application/jsonrpc'
+    return media_type == 'application/json'
+        or media_type:match('^application/.+%+json$') ~= nil
 end
 
 local function content_type_preference(accept_header, content_type)
@@ -740,6 +876,7 @@ local function content_type_preference(accept_header, content_type)
     local best_q = nil
     local best_specificity = nil
     local best_position = nil
+    local blocked_specificity = nil
 
     local position = 0
     for value in accept_header:gmatch('[^,]+') do
@@ -747,8 +884,12 @@ local function content_type_preference(accept_header, content_type)
         local media_range = parse_media_range(value)
         local specificity = content_type_match_specificity(media_range, content_type)
 
-        if specificity ~= nil and media_range.q > 0 then
-            if
+        if specificity ~= nil then
+            if media_range.q == 0 then
+                if blocked_specificity == nil or specificity > blocked_specificity then
+                    blocked_specificity = specificity
+                end
+            elseif
                 best_specificity == nil
                 or specificity > best_specificity
                 or (specificity == best_specificity and media_range.q > best_q)
@@ -761,6 +902,12 @@ local function content_type_preference(accept_header, content_type)
         end
     end
 
+    if blocked_specificity ~= nil and best_specificity ~= nil and blocked_specificity == best_specificity then
+        return {
+            acceptable = false,
+        }
+    end
+
     return {
         acceptable = best_q ~= nil,
         q = best_q,
@@ -769,16 +916,34 @@ local function content_type_preference(accept_header, content_type)
     }
 end
 
+local function content_type_excluded(accept_header, content_type)
+    if type(accept_header) ~= 'string' or vim.trim(accept_header) == '' then
+        return false
+    end
+
+    local blocked_specificity = nil
+
+    for value in accept_header:gmatch('[^,]+') do
+        local media_range = parse_media_range(value)
+        local specificity = content_type_match_specificity(media_range, content_type)
+
+        if specificity ~= nil and media_range.q == 0 then
+            if blocked_specificity == nil or specificity > blocked_specificity then
+                blocked_specificity = specificity
+            end
+        end
+    end
+
+    return blocked_specificity ~= nil and blocked_specificity >= 2
+end
+
 local function accepts_content_type(accept_header, content_type)
     return content_type_preference(accept_header, content_type).acceptable
 end
 
 local function negotiate_response_content_type(accept_header)
     local candidates = {
-        { request = 'application/json', response = 'application/json' },
-        { request = 'application/jsonrpc', response = 'application/jsonrpc' },
-        { request = 'application/*+json', response = 'application/json' },
-        { request = 'text/event-stream', response = 'application/json' },
+        { response = 'application/json', aliases = { 'application/*+json', '*/*' } },
     }
 
     local best_content_type = nil
@@ -787,10 +952,39 @@ local function negotiate_response_content_type(accept_header)
     local best_position = nil
 
     for _, candidate in ipairs(candidates) do
-        local preference = content_type_preference(accept_header, candidate.request)
+        if content_type_excluded(accept_header, candidate.response) then
+            goto continue
+        end
+
+        local preference = content_type_preference(accept_header, candidate.response)
+
+        if not preference.acceptable then
+            preference = nil
+        end
+
+        for _, alias in ipairs(candidate.aliases) do
+            local alias_preference = content_type_preference(accept_header, alias)
+
+            if
+                alias_preference.acceptable
+                and (
+                    preference == nil
+                    or alias_preference.specificity > preference.specificity
+                    or (alias_preference.specificity == preference.specificity and alias_preference.q > preference.q)
+                    or (
+                        alias_preference.specificity == preference.specificity
+                        and alias_preference.q == preference.q
+                        and alias_preference.position < preference.position
+                    )
+                )
+            then
+                preference = alias_preference
+            end
+        end
 
         if
-            preference.acceptable
+            preference ~= nil
+            and preference.acceptable
             and (
                 best_content_type == nil
                 or preference.specificity > best_specificity
@@ -807,6 +1001,8 @@ local function negotiate_response_content_type(accept_header)
             best_specificity = preference.specificity
             best_position = preference.position
         end
+
+        ::continue::
     end
 
     return best_content_type
@@ -889,6 +1085,40 @@ local function dispatch_jsonrpc_message(message)
     return router.handle_request(message.method, message.params, message.id, {})
 end
 
+local function is_cors_preflight_request(request)
+    if request == nil or request.method ~= 'OPTIONS' then
+        return false
+    end
+
+    local headers = request.headers or {}
+    local origin = headers.origin or headers.Origin
+    local requested_method = headers['access-control-request-method'] or headers['Access-Control-Request-Method']
+    local requested_headers = headers['access-control-request-headers'] or headers['Access-Control-Request-Headers']
+
+    if has_session_http_token() then
+        if type(requested_headers) ~= 'string' then
+            return false
+        end
+
+        local declares_authorization = false
+        for header_name in requested_headers:gmatch('[^,]+') do
+            if vim.trim(header_name):lower() == 'authorization' then
+                declares_authorization = true
+                break
+            end
+        end
+
+        if not declares_authorization then
+            return false
+        end
+    end
+
+    return type(origin) == 'string'
+        and origin ~= ''
+        and type(requested_method) == 'string'
+        and requested_method:upper() == 'POST'
+end
+
 local function handle_http_request(client, request)
     if client:is_closing() then
         return
@@ -896,12 +1126,6 @@ local function handle_http_request(client, request)
 
     local keep_alive = should_keep_alive(request)
     local http_version = request.http_version
-
-    if http_version ~= 'HTTP/1.1' and http_version ~= 'HTTP/1.0' then
-        send_response(client, 505, '', nil, false, 'HTTP/1.1')
-        return
-    end
-
     local response_headers = cors_headers(request)
 
     if request.path ~= '/mcp' then
@@ -918,25 +1142,30 @@ local function handle_http_request(client, request)
         )
         return
     end
+    if http_version ~= 'HTTP/1.1' and http_version ~= 'HTTP/1.0' then
+        send_response(client, 505, '', nil, false, 'HTTP/1.1')
+        return
+    end
 
-    if request.method == 'OPTIONS' then
-        local accept_header = request.headers.accept
-        if negotiate_response_content_type(accept_header) == nil then
-            send_json_response(
-                client,
-                406,
-                vim.json.encode({
-                    error = 'unsupported accept header',
-                }),
-                keep_alive,
-                http_version,
-                nil,
-                response_headers
-            )
-            return
-        end
-
+    if is_cors_preflight_request(request) then
         send_response(client, 204, '', response_headers, keep_alive, http_version)
+        return
+    end
+
+    if has_session_http_token() and not constant_time_equals(request_bearer_token(request), session_http_token) then
+        send_json_response(
+            client,
+            401,
+            vim.json.encode({
+                error = 'unauthorized',
+            }),
+            keep_alive,
+            http_version,
+            nil,
+            vim.list_extend(response_headers, {
+                'WWW-Authenticate: Bearer',
+            })
+        )
         return
     end
 
@@ -989,7 +1218,7 @@ local function handle_http_request(client, request)
         return
     end
 
-    local ok, message = pcall(vim.json.decode, request.body)
+    local ok, decoded = pcall(vim.json.decode, request.body)
 
     if not ok then
         send_json_response(
@@ -1000,7 +1229,7 @@ local function handle_http_request(client, request)
                 id = vim.NIL,
                 error = {
                     code = -32700,
-                    message = tostring(message),
+                    message = tostring(decoded),
                 },
             }),
             keep_alive,
@@ -1011,7 +1240,9 @@ local function handle_http_request(client, request)
         return
     end
 
-    if type(message) ~= 'table' then
+    local message = decoded
+
+    if message == vim.NIL or type(message) ~= 'table' then
         local response = invalid_request_response(vim.NIL)
         send_json_response(
             client,
@@ -1112,6 +1343,11 @@ function M._start_client_read(client, initial_buffer)
             return
         end
 
+        if client.read_start == nil then
+            close_client(client)
+            return
+        end
+
         reading = true
         client:read_start(function(err, data)
             reading = false
@@ -1158,27 +1394,22 @@ function M.start()
 
     if server ~= nil and not server:is_closing() then
         if startup_pending then
-            local same_port = bound_port == descriptor.http_port
-                or descriptor.http_port == 0
-                or bound_port == 0
-            local same_host = bound_host == descriptor.http_host
-                or bound_host == nil
-                or descriptor.http_host == nil
+            local same_port = bound_port == descriptor.http_port or (descriptor.http_port == 0 and bound_port == 0)
+            local same_host = bound_host == descriptor.http_host or bound_host == nil or descriptor.http_host == nil
 
             if same_host and same_port then
                 return true, nil
             end
 
-            return false, startup_error or 'http server startup pending'
-        end
-
-        local same_port = bound_port == descriptor.http_port
-            or descriptor.http_port == 0
-
-        if bound_host ~= descriptor.http_host or not same_port then
             M.stop()
         else
-            return true, nil
+            local same_port = bound_port == descriptor.http_port or descriptor.http_port == 0
+
+            if bound_host ~= descriptor.http_host or not same_port then
+                M.stop()
+            else
+                return true, nil
+            end
         end
     end
 
@@ -1192,9 +1423,9 @@ function M.start()
     end
     pending_clients = {}
 
-
     startup_error = nil
     startup_pending = true
+    session_http_token = descriptor.http_token
     server = assert(vim.uv.new_tcp())
     local ok, err = server:bind(descriptor.http_host, descriptor.http_port)
 
@@ -1285,9 +1516,10 @@ function M.start()
         return false, startup_error
     end
 
+    local probe_host = probe_host_for(bound_host, descriptor.http_host)
     local probe = assert(vim.uv.new_tcp())
     local probe_pending = true
-    local connect_ok, connect_err = probe:connect(bound_host, bound_port, function(callback_err)
+    local connect_ok, connect_err = probe:connect(probe_host, bound_port, function(callback_err)
         probe_pending = false
         if callback_err then
             startup_error = tostring(callback_err)
@@ -1454,6 +1686,7 @@ function M.stop()
     bound_port = nil
     startup_error = nil
     startup_pending = false
+    session_http_token = nil
 end
 
 ---@return boolean

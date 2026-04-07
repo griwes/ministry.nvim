@@ -51,4 +51,5 @@
 ---@field transport 'socket'|'http'
 ---@field http_host string
 ---@field http_port integer
+---@field http_token? string
 ---@field auto_start boolean

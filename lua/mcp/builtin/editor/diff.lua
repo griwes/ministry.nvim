@@ -250,7 +250,7 @@ function M.apply_file(path, content)
 
     return {
         path = normalized,
-        reloaded_buffer = bufnr ~= nil,
+        reloaded_buffer = bufnr ~= nil and warning == nil,
     },
         nil,
         warning

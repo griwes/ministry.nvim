@@ -50,21 +50,29 @@ end
 ---@param port? integer
 ---@return mcp.EndpointDescriptor
 function M.describe_http(host, port)
-    local http_host = host or config.get().http_host
-    local configured_port = config.get().http_port
+    local applied = config.get()
+    local http_host = host or applied.http_host
+    local configured_port = applied.http_port
     local http_port = port or configured_port
+    local http_token = applied.http_token
     local url = nil
     local invocation = {}
 
     if http_port ~= 0 then
         url = string.format('http://%s:%d/mcp', format_http_host(http_host), http_port)
         invocation.url = url
+        if type(http_token) == 'string' and http_token ~= '' then
+            invocation.headers = {
+                Authorization = 'Bearer ' .. http_token,
+            }
+        end
     end
 
     return {
         transport = 'http',
         http_host = http_host,
         http_port = http_port,
+        http_token = http_token,
         url = url,
         command = '',
         args = {},
