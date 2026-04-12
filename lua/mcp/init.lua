@@ -110,6 +110,52 @@ local function snapshot_neovim_overrides(existing)
     }
 end
 
+local function contains_key_overlap(existing_items, builtin_items, key)
+    local builtin_keys = {}
+
+    for _, item in ipairs(builtin_items or {}) do
+        builtin_keys[item[key]] = true
+    end
+
+    for _, item in ipairs(existing_items or {}) do
+        if builtin_keys[item[key]] then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function has_any_items(items)
+    return items ~= nil and #items > 0
+end
+
+local function explicit_custom_neovim(existing)
+    if existing == nil then
+        return false
+    end
+
+    local builtin = builtin_neovim_server_spec()
+    local existing_tools = registry.normalize_tools(existing.tools)
+    local builtin_tools = registry.normalize_tools(builtin.tools)
+
+    local overlaps_builtin = contains_key_overlap(existing_tools, builtin_tools, 'name')
+        or contains_key_overlap(existing.resources, builtin.resources, 'uri')
+        or contains_key_overlap(existing.resource_templates, builtin.resource_templates, 'uri_template')
+        or contains_key_overlap(existing.prompts, builtin.prompts, 'name')
+
+    if overlaps_builtin then
+        return false
+    end
+
+    return has_any_items(existing_tools)
+        or has_any_items(existing.resources)
+        or has_any_items(existing.resource_templates)
+        or has_any_items(existing.prompts)
+        or existing.title ~= nil
+        or existing.description ~= nil
+end
+
 local function tool_specs_equal(left, right)
     if left == right then
         return true
@@ -176,8 +222,8 @@ local function snapshot_user_neovim_overrides(existing)
     local builtin = builtin_neovim_server_spec()
 
     return {
-        title = existing.title ~= builtin.title and existing.title or nil,
-        description = existing.description ~= builtin.description and existing.description or nil,
+        title = nil,
+        description = nil,
         tools = strip_builtin_tool_overrides(existing.tools, builtin.tools),
         resources = strip_builtin_named_overrides(existing.resources, builtin.resources, 'uri'),
         resource_templates = strip_builtin_named_overrides(existing.resource_templates, builtin.resource_templates, 'uri_template'),
@@ -192,8 +238,14 @@ local function sync_builtin_neovim_state(existing)
         return
     end
 
+    if explicit_custom_neovim(existing) then
+        builtin_neovim_overrides = snapshot_neovim_overrides(existing)
+        builtin_neovim_mode = 'custom'
+        return
+    end
+
     builtin_neovim_overrides = snapshot_user_neovim_overrides(existing)
-    builtin_neovim_mode = builtin_neovim_overrides == nil and 'custom' or 'overrides'
+    builtin_neovim_mode = builtin_neovim_overrides == nil and 'builtin' or 'overrides'
 end
 
 local function register_builtin_neovim_server(existing)
@@ -247,10 +299,24 @@ end
 ---@param server mcp.ServerSpec
 ---@return mcp.ServerSpec
 function M.register_server(server)
+    local existing_neovim = server.name == 'neovim' and registry.get_server('neovim') or nil
     local registered = registry.register_server(server)
 
     if server.name == 'neovim' then
-        sync_builtin_neovim_state(registered)
+        if
+            existing_neovim == nil
+            and builtin_neovim_mode == 'builtin'
+            and server.title == nil
+            and server.description == nil
+        then
+            builtin_neovim_overrides = snapshot_neovim_overrides(registered)
+            builtin_neovim_mode = 'overrides'
+        elseif builtin_neovim_mode == 'custom' and existing_neovim ~= nil and server.description == nil then
+            builtin_neovim_overrides = snapshot_neovim_overrides(registered)
+            builtin_neovim_mode = 'overrides'
+        else
+            sync_builtin_neovim_state(registered)
+        end
     end
 
     return registered
@@ -269,6 +335,10 @@ end
 ---@param server_name string
 ---@param tool mcp.ToolSpec
 function M.register_tool(server_name, tool)
+    if server_name == 'neovim' and registry.get_server('neovim') == nil then
+        register_builtin_neovim_server(builtin_neovim_overrides)
+    end
+
     registry.register_tool(server_name, tool)
 
     if server_name == 'neovim' then
@@ -289,6 +359,10 @@ end
 ---@param server_name string
 ---@param resource mcp.ResourceSpec
 function M.register_resource(server_name, resource)
+    if server_name == 'neovim' and registry.get_server('neovim') == nil then
+        register_builtin_neovim_server(builtin_neovim_overrides)
+    end
+
     registry.register_resource(server_name, resource)
 
     if server_name == 'neovim' then
@@ -309,6 +383,10 @@ end
 ---@param server_name string
 ---@param resource_template mcp.ResourceTemplateSpec
 function M.register_resource_template(server_name, resource_template)
+    if server_name == 'neovim' and registry.get_server('neovim') == nil then
+        register_builtin_neovim_server(builtin_neovim_overrides)
+    end
+
     registry.register_resource_template(server_name, resource_template)
 
     if server_name == 'neovim' then
@@ -329,6 +407,10 @@ end
 ---@param server_name string
 ---@param prompt mcp.PromptSpec
 function M.register_prompt(server_name, prompt)
+    if server_name == 'neovim' and registry.get_server('neovim') == nil then
+        register_builtin_neovim_server(builtin_neovim_overrides)
+    end
+
     registry.register_prompt(server_name, prompt)
 
     if server_name == 'neovim' then

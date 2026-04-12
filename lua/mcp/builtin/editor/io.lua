@@ -84,9 +84,7 @@ function M.write_disk(path, content)
     if not ok or close_ok == false then
         return {
             code = -32000,
-            message = write_error
-                or close_error
-                or string.format('Failed to write file: %s', path),
+            message = write_error or close_error or string.format('Failed to write file: %s', path),
         }
     end
 
@@ -118,8 +116,15 @@ function M.reload_buffer(bufnr)
         return nil
     end
 
-    local function run_checktime_in_window(winid)
-        local current_buf = vim.api.nvim_win_get_buf(winid)
+    ---@param winid integer
+    ---@param opts? { restore_buf: boolean|nil, original_buf: integer|nil }
+    local function run_checktime_in_window(winid, opts)
+        opts = opts or {}
+        local restore_buf = opts.restore_buf ~= false
+        local current_buf = opts.original_buf
+        if restore_buf and current_buf == nil then
+            current_buf = vim.api.nvim_win_get_buf(winid)
+        end
         local original_tab = vim.api.nvim_get_current_tabpage()
         local original_win = vim.api.nvim_get_current_win()
         local original_view = vim.fn.winsaveview()
@@ -134,13 +139,16 @@ function M.reload_buffer(bufnr)
                 if not ok_checktime then
                     error(checktime_err)
                 end
-
-                local ok_restore_buf, restore_buf_err = pcall(vim.api.nvim_win_set_buf, 0, current_buf)
-                if not ok_restore_buf then
-                    error(restore_buf_err)
-                end
             end)
         end, debug.traceback)
+
+        if restore_buf and current_buf ~= nil and vim.api.nvim_win_is_valid(winid) then
+            local restore_ok, restore_err = pcall(vim.api.nvim_win_set_buf, winid, current_buf)
+            if not restore_ok then
+                reload_ok = false
+                reload_err = tostring(restore_err)
+            end
+        end
 
         if vim.api.nvim_tabpage_is_valid(original_tab) then
             vim.api.nvim_set_current_tabpage(original_tab)
@@ -154,40 +162,83 @@ function M.reload_buffer(bufnr)
         end
     end
 
+    ---@return integer|nil
+    local function find_reusable_reload_window()
+        local current_tab = vim.api.nvim_get_current_tabpage()
+
+        for _, tabpage in ipairs(vim.api.nvim_list_tabpages()) do
+            if tabpage == current_tab then
+                for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
+                    local config = vim.api.nvim_win_get_config(winid)
+                    if config.relative == '' and vim.fn.getwinvar(winid, '&buftype') ~= 'nofile' then
+                        local winbuf = vim.api.nvim_win_get_buf(winid)
+                        if vim.api.nvim_buf_get_name(winbuf) == '' and not vim.bo[winbuf].modified then
+                            return winid
+                        end
+                    end
+                end
+            end
+        end
+
+        for _, tabpage in ipairs(vim.api.nvim_list_tabpages()) do
+            if tabpage ~= current_tab then
+                for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
+                    local config = vim.api.nvim_win_get_config(winid)
+                    if config.relative == '' and vim.fn.getwinvar(winid, '&buftype') ~= 'nofile' then
+                        local winbuf = vim.api.nvim_win_get_buf(winid)
+                        if vim.api.nvim_buf_get_name(winbuf) == '' and not vim.bo[winbuf].modified then
+                            return winid
+                        end
+                    end
+                end
+            end
+        end
+
+        return nil
+    end
+
+    ---@return boolean, string|nil
+    local function reload_hidden_buffer_in_temporary_window()
+        local temp_buf = vim.api.nvim_create_buf(false, true)
+        local ok_open, temp_win_or_err = pcall(vim.api.nvim_open_win, temp_buf, false, {
+            relative = 'editor',
+            row = 0,
+            col = 0,
+            width = 1,
+            height = 1,
+            style = 'minimal',
+            focusable = false,
+            noautocmd = true,
+        })
+
+        if not ok_open then
+            if vim.api.nvim_buf_is_valid(temp_buf) then
+                vim.api.nvim_buf_delete(temp_buf, { force = true })
+            end
+            return false, 'failed to create temporary reload window: ' .. tostring(temp_win_or_err)
+        end
+
+        local temp_win = temp_win_or_err
+        local reload_ok, reload_err = xpcall(function()
+            run_checktime_in_window(temp_win, { restore_buf = false, original_buf = temp_buf })
+        end, debug.traceback)
+
+        if vim.api.nvim_win_is_valid(temp_win) then
+            vim.api.nvim_win_close(temp_win, true)
+        end
+        if vim.api.nvim_buf_is_valid(temp_buf) then
+            vim.api.nvim_buf_delete(temp_buf, { force = true })
+        end
+
+        if not reload_ok then
+            error(reload_err)
+        end
+
+        return true, nil
+    end
+
     local function reload_hidden_buffer_without_window()
         local name = vim.api.nvim_buf_get_name(bufnr)
-        local fallback_win
-
-        for _, winid in ipairs(vim.api.nvim_list_wins()) do
-            local config = vim.api.nvim_win_get_config(winid)
-            if config.relative == '' and vim.fn.getwinvar(winid, '&buftype') ~= 'nofile' then
-                fallback_win = winid
-                break
-            end
-        end
-
-        if fallback_win then
-            local original_buf = vim.api.nvim_win_get_buf(fallback_win)
-
-            local reload_ok, reload_err = xpcall(function()
-                vim.api.nvim_win_set_buf(fallback_win, bufnr)
-                run_checktime_in_window(fallback_win)
-            end, debug.traceback)
-
-            local restore_ok, restore_err = pcall(function()
-                if vim.api.nvim_win_is_valid(fallback_win) then
-                    vim.api.nvim_win_set_buf(fallback_win, original_buf)
-                end
-            end)
-
-            if not reload_ok then
-                error(reload_err)
-            end
-            if not restore_ok then
-                error(restore_err)
-            end
-            return
-        end
 
         if name == '' then
             error('failed to reload hidden buffer without a file path')
@@ -198,12 +249,22 @@ function M.reload_buffer(bufnr)
             table.remove(lines)
         end
         local fileinfo = vim.fn.getfperm(name)
+        local permission_writable = type(fileinfo) == 'string' and fileinfo ~= '' and fileinfo:sub(2, 2) == 'w'
+        local filewritable_result = vim.fn.filewritable and vim.fn.filewritable(name) or -1
         local writable = false
 
-        if vim.fn.filewritable and vim.fn.filewritable(name) == 1 then
-            writable = true
+        if filewritable_result == 1 then
+            writable = permission_writable
+        elseif filewritable_result == 0 then
+            if vim.uv and vim.uv.fs_access then
+                writable = vim.uv.fs_access(name, 'W') or false
+            elseif vim.loop and vim.loop.fs_access then
+                writable = vim.loop.fs_access(name, 'W') or false
+            else
+                writable = permission_writable
+            end
         elseif type(fileinfo) == 'string' and fileinfo ~= '' then
-            writable = fileinfo:sub(3, 3) == 'w'
+            writable = permission_writable
         elseif vim.uv and vim.uv.fs_access then
             writable = vim.uv.fs_access(name, 'W') or false
         elseif vim.loop and vim.loop.fs_access then
@@ -240,7 +301,10 @@ function M.reload_buffer(bufnr)
         vim.bo[bufnr].modifiable = true
         vim.bo[bufnr].readonly = false
         vim.bo[bufnr].modified = false
-        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+        vim.fn.deletebufline(bufnr, 1, '$')
+        if #lines > 0 then
+            vim.fn.setbufline(bufnr, 1, lines)
+        end
         vim.bo[bufnr].endofline = endofline
         vim.bo[bufnr].fixendofline = endofline
         vim.bo[bufnr].fileformat = fileformat
@@ -250,41 +314,30 @@ function M.reload_buffer(bufnr)
     end
 
     local ok, reload_error = pcall(function()
-        vim.api.nvim_buf_call(bufnr, function()
-            local windows = vim.fn.win_findbuf(bufnr)
+        local windows = vim.fn.win_findbuf(bufnr)
 
-            if #windows == 0 then
-                local fallback_win
+        if #windows == 0 then
+            local fallback_win = find_reusable_reload_window()
 
-                for _, tabpage in ipairs(vim.api.nvim_list_tabpages()) do
-                    for _, winid in ipairs(vim.api.nvim_tabpage_list_wins(tabpage)) do
-                        local config = vim.api.nvim_win_get_config(winid)
-                        if config.relative == '' and vim.fn.getwinvar(winid, '&buftype') ~= 'nofile' then
-                            fallback_win = winid
-                            break
-                        end
-                    end
-
-                    if fallback_win then
-                        break
-                    end
+            if fallback_win ~= nil then
+                run_checktime_in_window(fallback_win)
+            elseif vim.api.nvim_buf_get_name(bufnr) ~= '' then
+                reload_hidden_buffer_without_window()
+            else
+                local temp_ok, temp_err = reload_hidden_buffer_in_temporary_window()
+                if not temp_ok then
+                    error(temp_err)
                 end
-
-                if fallback_win then
-                    run_checktime_in_window(fallback_win)
-                else
-                    reload_hidden_buffer_without_window()
-                end
-
-                return
             end
 
-            for _, winid in ipairs(windows) do
-                vim.api.nvim_win_call(winid, function()
-                    vim.cmd('silent checktime')
-                end)
-            end
-        end)
+            return
+        end
+
+        for _, winid in ipairs(windows) do
+            vim.api.nvim_win_call(winid, function()
+                vim.cmd('silent checktime')
+            end)
+        end
     end)
 
     if not ok then
@@ -383,9 +436,7 @@ function M.write_file(path, content)
     return {
         path = normalized,
         reloaded_buffer = bufnr ~= nil and warning == nil,
-    },
-        nil,
-        warning
+    }, nil, warning
 end
 
 return M

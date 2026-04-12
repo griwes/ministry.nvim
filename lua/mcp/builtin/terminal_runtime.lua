@@ -52,6 +52,32 @@ local function append_output_if_missing(chunks, output)
     end
 end
 
+---@param completed table|nil
+---@return boolean
+local function completed_with_failure(completed)
+    if completed == nil then
+        return false
+    end
+
+    if completed.code ~= nil then
+        return completed.code ~= 0
+    end
+
+    return completed.signal ~= nil and completed.signal ~= 0
+end
+
+---@param terminal table
+---@param completed table|nil
+local function apply_completion(terminal, completed)
+    if completed == nil then
+        return
+    end
+
+    append_output_if_missing(terminal.stdout_chunks, completed.stdout)
+    append_output_if_missing(terminal.stderr_chunks, completed.stderr)
+    terminal.completed = completed
+end
+
 ---@param terminal table
 ---@return table
 local function wait_for_completion(terminal)
@@ -69,10 +95,11 @@ local function wait_for_completion(terminal)
 
     local completed = terminal.proc:wait()
     if completed == nil then
-        return nil, {
-            code = -32000,
-            message = 'terminal wait failed to produce a completion result',
-        }
+        return nil,
+            {
+                code = -32000,
+                message = 'terminal wait failed to produce a completion result',
+            }
     end
 
     terminal.completed = completed
@@ -113,69 +140,65 @@ end
 ---@return table|nil, table|nil
 function M.create(command, cwd)
     local terminal_id = next_id()
-    local stdout_chunks = {}
-    local stderr_chunks = {}
-    local pending_completed
+    local terminal = {
+        proc = nil,
+        stdout_chunks = {},
+        stderr_chunks = {},
+        completed = nil,
+    }
 
     if cwd ~= nil then
         cwd = editor_io.normalize_path(cwd)
         local stat = vim.uv.fs_stat(cwd)
         if stat == nil then
-            return nil, {
-                code = -32602,
-                message = 'Invalid arguments: cwd does not exist',
-            }
+            return nil,
+                {
+                    code = -32602,
+                    message = 'Invalid arguments: cwd does not exist',
+                }
         end
 
         if stat.type ~= 'directory' then
-            return nil, {
-                code = -32602,
-                message = 'Invalid arguments: cwd must be a directory',
-            }
+            return nil,
+                {
+                    code = -32602,
+                    message = 'Invalid arguments: cwd must be a directory',
+                }
         end
     end
 
-    local ok, proc = pcall(
-        vim.system,
-        command,
-        {
-            cwd = cwd,
-            text = true,
-        },
-        function(obj)
-            local terminal = terminals[terminal_id]
-            if terminal == nil then
-                pending_completed = obj
-                return
-            end
+    terminals[terminal_id] = terminal
 
-            append_output_if_missing(terminal.stdout_chunks, obj.stdout)
-            append_output_if_missing(terminal.stderr_chunks, obj.stderr)
-
-            terminal.completed = obj
+    local ok, proc = pcall(vim.system, command, {
+        cwd = cwd,
+        text = true,
+    }, function(obj)
+        local current = terminals[terminal_id]
+        if current == nil then
+            return
         end
-    )
+
+        apply_completion(current, obj)
+    end)
 
     if not ok then
+        terminals[terminal_id] = nil
         return nil, {
             code = -32000,
             message = tostring(proc),
         }
     end
 
-    if pending_completed ~= nil then
-        return nil, {
-            code = -32000,
-            message = pending_completed.stderr or pending_completed.stdout or 'failed to start terminal command',
-        }
-    end
+    terminal.proc = proc
 
-    terminals[terminal_id] = {
-        proc = proc,
-        stdout_chunks = stdout_chunks,
-        stderr_chunks = stderr_chunks,
-        completed = pending_completed,
-    }
+    if completed_with_failure(terminal.completed) then
+        terminals[terminal_id] = nil
+        return nil,
+            {
+                code = -32000,
+                message = terminal.completed.stderr or terminal.completed.stdout or 'failed to start terminal command',
+            }
+    end
 
     return {
         terminal_id = terminal_id,
