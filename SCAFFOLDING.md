@@ -10,10 +10,10 @@ This template is the common source for new plugin repositories in this workspace
 
 ## Placeholder Tokens
 
-- `mcp.nvim`
-- `mcp.nvim`
+- `ministry.nvim`
+- `ministry.nvim`
 - `mcp`
-- `Neovim-native unified MCP substrate with namespaced sub-server registration and one endpoint per session.`
+- `Neovim-native unified MCP substrate with namespaced sub-server registration and one endpoint per continuity.`
 
 ## Expected Scaffold Flow
 
