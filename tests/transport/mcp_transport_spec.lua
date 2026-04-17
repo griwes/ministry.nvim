@@ -195,6 +195,7 @@ describe('mcp', function()
         local servers = plugin.list_servers()
         local tools = plugin.list_tool_descriptors()
         local resources = plugin.list_resource_descriptors()
+        local resource_templates = plugin.list_resource_template_descriptors()
         local prompts = plugin.list_prompt_descriptors()
 
         local server_names = vim.tbl_map(function(server)
@@ -206,6 +207,9 @@ describe('mcp', function()
         local resource_names = vim.tbl_map(function(resource)
             return resource.namespaced_uri
         end, resources)
+        local resource_template_names = vim.tbl_map(function(resource_template)
+            return resource_template.namespaced_uri_template
+        end, resource_templates)
         local prompt_names = vim.tbl_map(function(prompt)
             return prompt.namespaced_name
         end, prompts)
@@ -217,9 +221,32 @@ describe('mcp', function()
         assert.is_true(vim.tbl_contains(tool_names, 'neovim/terminal/create'))
         assert.is_false(vim.tbl_contains(tool_names, 'neovim/editor/read_current_buffer'))
         assert.is_true(vim.tbl_contains(tool_names, 'neovim/editor/list_buffers'))
+        assert.is_true(vim.tbl_contains(tool_names, 'neovim/lsp/list_diagnostics'))
+        assert.is_true(vim.tbl_contains(tool_names, 'neovim/lsp/code_actions'))
+        assert.is_true(vim.tbl_contains(tool_names, 'neovim/lsp/document_symbols'))
+        assert.is_true(vim.tbl_contains(tool_names, 'neovim/lsp/workspace_symbols'))
+        assert.is_true(vim.tbl_contains(tool_names, 'neovim/lsp/definitions'))
+        assert.is_true(vim.tbl_contains(tool_names, 'neovim/lsp/rename'))
+        assert.is_true(vim.tbl_contains(tool_names, 'neovim/dap/continue'))
+        assert.is_true(vim.tbl_contains(tool_names, 'neovim/dap/pause'))
         assert.is_false(vim.tbl_contains(resource_names, 'neovim/buffer://current'))
         assert.is_true(vim.tbl_contains(resource_names, 'neovim/buffers://list'))
         assert.is_true(vim.tbl_contains(resource_names, 'neovim/workspace://summary'))
+        assert.is_true(vim.tbl_contains(resource_names, 'neovim/tasks://summary'))
+        assert.is_true(vim.tbl_contains(resource_names, 'neovim/lsp://summary'))
+        assert.is_true(vim.tbl_contains(resource_names, 'neovim/dap://summary'))
+        assert.is_true(vim.tbl_contains(resource_names, 'neovim/dap://breakpoints'))
+        assert.is_true(vim.tbl_contains(resource_names, 'neovim/dap://threads'))
+        assert.is_true(vim.tbl_contains(resource_names, 'neovim/coverage://summary'))
+        assert.is_true(vim.tbl_contains(resource_names, 'neovim/formatting://summary'))
+        assert.is_true(vim.tbl_contains(resource_names, 'neovim/lint://summary'))
+        assert.is_true(vim.tbl_contains(resource_names, 'neovim/mason://inventory'))
+        assert.is_true(vim.tbl_contains(resource_names, 'neovim/navigation://marks'))
+        assert.is_true(vim.tbl_contains(resource_names, 'neovim/quickfix://summary'))
+        assert.is_true(vim.tbl_contains(resource_names, 'neovim/location-list://current'))
+        assert.is_true(vim.tbl_contains(resource_template_names, 'neovim/dap://stack/{thread_id}'))
+        assert.is_true(vim.tbl_contains(resource_template_names, 'neovim/dap://scopes/{frame_id}'))
+        assert.is_true(vim.tbl_contains(resource_template_names, 'neovim/dap://variables/{variables_reference}'))
         assert.is_true(vim.tbl_contains(resource_names, 'neovim/terminals://list'))
         assert.are.same({}, prompt_names)
         assert.are.equal(1, #listed.buffers)
@@ -253,6 +280,34 @@ describe('mcp', function()
 
         assert.is_false(vim.tbl_contains(tool_names, 'neovim/terminal/create'))
         assert.is_false(vim.tbl_contains(resource_names, 'neovim/terminals://list'))
+    end)
+
+    it('registers and unregisters server guidance without surfacing it as an MCP prompt', function()
+        local plugin = require('ministry')
+
+        plugin.register_server({
+            name = 'custom',
+            tools = {},
+        })
+
+        plugin.register_server_guidance('custom', {
+            'CUSTOM GUIDANCE',
+            'SECOND BLOCK',
+        })
+
+        assert.are.same({
+            {
+                server = 'custom',
+                guidance = 'CUSTOM GUIDANCE\n\nSECOND BLOCK',
+            },
+        }, plugin.list_server_guidance())
+        assert.are.equal('CUSTOM GUIDANCE\n\nSECOND BLOCK', plugin.server_guidance('custom'))
+        assert.are.same({}, plugin.list_prompt_descriptors())
+
+        plugin.unregister_server_guidance('custom')
+
+        assert.are.same({}, plugin.list_server_guidance())
+        assert.is_nil(plugin.server_guidance('custom'))
     end)
 
     it('drops built-in terminal tools when setup disables them after enabling', function()
@@ -290,6 +345,7 @@ describe('mcp', function()
 
             plugin.register_server({
                 name = 'neovim',
+                guidance = 'CUSTOM NEOVIM GUIDANCE',
                 tools = {
                     custom = {
                         ping = {
@@ -352,6 +408,9 @@ describe('mcp', function()
 
             assert.is_true(vim.tbl_contains(tool_names, 'neovim/custom/ping'))
             assert.is_true(vim.tbl_contains(tool_names, 'neovim/editor/list_buffers'))
+            assert.is_true(vim.tbl_contains(tool_names, 'neovim/lsp/list_diagnostics'))
+            assert.is_true(vim.tbl_contains(tool_names, 'neovim/lsp/code_actions'))
+            assert.is_true(vim.tbl_contains(tool_names, 'neovim/lsp/rename'))
             assert.is_true(vim.tbl_contains(tool_names, 'neovim/terminal/create'))
             assert.are.equal(
                 1,
@@ -368,15 +427,28 @@ describe('mcp', function()
             assert.are.equal(
                 1,
                 vim.tbl_count(vim.tbl_filter(function(name)
+                    return name == 'neovim/lsp/list_diagnostics'
+                end, tool_names))
+            )
+            assert.are.equal(
+                1,
+                vim.tbl_count(vim.tbl_filter(function(name)
                     return name == 'neovim/terminal/create'
                 end, tool_names))
             )
             assert.is_true(vim.tbl_contains(resource_names, 'neovim/custom://status'))
             assert.is_true(vim.tbl_contains(resource_names, 'neovim/buffers://list'))
+            assert.is_true(vim.tbl_contains(resource_names, 'neovim/lsp://summary'))
             assert.are.equal(
                 1,
                 vim.tbl_count(vim.tbl_filter(function(name)
                     return name == 'neovim/custom://status'
+                end, resource_names))
+            )
+            assert.are.equal(
+                1,
+                vim.tbl_count(vim.tbl_filter(function(name)
+                    return name == 'neovim/lsp://summary'
                 end, resource_names))
             )
             assert.are.equal(
@@ -392,6 +464,13 @@ describe('mcp', function()
                     return name == 'neovim/custom_prompt'
                 end, prompt_names))
             )
+            assert.are.equal('CUSTOM NEOVIM GUIDANCE', plugin.server_guidance('neovim'))
+            assert.are.same({
+                {
+                    server = 'neovim',
+                    guidance = 'CUSTOM NEOVIM GUIDANCE',
+                },
+            }, plugin.list_server_guidance())
             assert.are.equal(
                 1,
                 vim.tbl_count(vim.tbl_filter(function(template)

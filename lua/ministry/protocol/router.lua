@@ -387,6 +387,48 @@ function M.handle_request(method, params, id, context)
         return success_response(id, response)
     end
 
+    if method == 'resources/templates/read' then
+        local request = params or {}
+        local resource_template, template_arguments, err = registry.find_resource_template(request.uri or '')
+
+        if err ~= nil then
+            return error_response(id, -32602, err)
+        end
+
+        local handler_request = vim.deepcopy(request)
+        handler_request.arguments = template_arguments
+        for key, value in pairs(template_arguments or {}) do
+            handler_request[key] = value
+        end
+
+        local ok, result, handler_err = pcall(resource_template.handler, handler_request, context or {})
+
+        if not ok then
+            return error_response(id, -32000, result or 'ministry.nvim resource template read failed')
+        end
+
+        if handler_err ~= nil then
+            return error_response(
+                id,
+                handler_err.code or -32000,
+                handler_err.message or 'ministry.nvim resource template read failed'
+            )
+        end
+
+        local response = resource_read_result(result)
+        for _, item in ipairs(response.contents or {}) do
+            if item.uri == nil or item.uri == '' then
+                item.uri = request.uri
+            end
+
+            if item.mimeType == nil and resource_template.mime_type ~= nil then
+                item.mimeType = resource_template.mime_type
+            end
+        end
+
+        return success_response(id, response)
+    end
+
     if method == 'prompts/get' then
         local request = params or {}
         local prompt, err = registry.find_prompt(request.name or '')

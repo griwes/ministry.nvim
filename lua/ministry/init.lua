@@ -1,5 +1,14 @@
 local config = require('ministry.core.config')
+local builtin_coverage = require('ministry.builtin.coverage.init')
+local builtin_dap = require('ministry.builtin.dap.init')
 local builtin_editor = require('ministry.builtin.editor.init')
+local builtin_formatting = require('ministry.builtin.formatting.init')
+local builtin_lint = require('ministry.builtin.lint.init')
+local builtin_lsp = require('ministry.builtin.lsp.init')
+local builtin_mason = require('ministry.builtin.mason.init')
+local builtin_navigation = require('ministry.builtin.navigation.init')
+local builtin_overseer = require('ministry.builtin.overseer.init')
+local builtin_quickfix = require('ministry.builtin.quickfix.init')
 local builtin_terminal = require('ministry.builtin.terminal')
 local builtin_terminal_runtime = require('ministry.builtin.terminal_runtime')
 local dispatch = require('ministry.protocol.dispatch')
@@ -35,9 +44,21 @@ local function builtin_neovim_server_spec()
     local editor_server = builtin_editor.server_spec()
     local applied = config.get()
     local tools = {
+        dap = builtin_dap.tools_tree(),
         editor = builtin_editor.tools_tree(),
+        lsp = builtin_lsp.tools_tree(),
     }
-    local resources = editor_server.resources
+    local resources = merge_named_specs(builtin_coverage.server_spec().resources, builtin_dap.server_spec().resources, 'uri')
+    resources = merge_named_specs(resources, builtin_lsp.server_spec().resources, 'uri')
+    resources = merge_named_specs(builtin_formatting.server_spec().resources, resources, 'uri')
+    resources = merge_named_specs(builtin_lint.server_spec().resources, resources, 'uri')
+    resources = merge_named_specs(builtin_mason.server_spec().resources, resources, 'uri')
+    resources = merge_named_specs(builtin_navigation.server_spec().resources, resources, 'uri')
+    resources = merge_named_specs(builtin_overseer.server_spec().resources, resources, 'uri')
+    resources = merge_named_specs(builtin_quickfix.server_spec().resources, resources, 'uri')
+    resources = merge_named_specs(resources, editor_server.resources, 'uri')
+    local resource_templates =
+        merge_named_specs(builtin_dap.server_spec().resource_templates, editor_server.resource_templates, 'uri_template')
 
     if applied.enable_terminal_tools then
         tools.terminal = builtin_terminal.tools_tree()
@@ -50,7 +71,7 @@ local function builtin_neovim_server_spec()
         description = 'Built-in Neovim-local MCP capability surfaces.',
         tools = tools,
         resources = resources,
-        resource_templates = editor_server.resource_templates,
+        resource_templates = resource_templates,
         prompts = editor_server.prompts,
     }
 end
@@ -107,6 +128,7 @@ local function snapshot_neovim_overrides(existing)
     return {
         title = existing.title,
         description = existing.description,
+        guidance = existing.guidance,
         tools = existing.tools,
         resources = existing.resources,
         resource_templates = existing.resource_templates,
@@ -228,6 +250,7 @@ local function snapshot_user_neovim_overrides(existing)
     return {
         title = nil,
         description = nil,
+        guidance = existing.guidance,
         tools = strip_builtin_tool_overrides(existing.tools, builtin.tools),
         resources = strip_builtin_named_overrides(existing.resources, builtin.resources, 'uri'),
         resource_templates = strip_builtin_named_overrides(
@@ -278,6 +301,7 @@ local function register_builtin_neovim_server(existing)
         name = 'neovim',
         title = overrides.title or builtin.title,
         description = overrides.description or builtin.description,
+        guidance = overrides.guidance or builtin.guidance,
         tools = merge_tool_specs(overrides.tools, builtin.tools),
         resources = merge_named_specs(overrides.resources, builtin.resources, 'uri'),
         resource_templates = merge_named_specs(
@@ -440,6 +464,29 @@ function M.unregister_prompt(server_name, prompt_name)
     end
 end
 
+---@param server_name string
+---@param guidance string|string[]|fun(ctx: table): string|string[]|nil
+function M.register_server_guidance(server_name, guidance)
+    if server_name == 'neovim' and registry.get_server('neovim') == nil then
+        register_builtin_neovim_server(builtin_neovim_overrides)
+    end
+
+    registry.register_server_guidance(server_name, guidance)
+
+    if server_name == 'neovim' then
+        sync_builtin_neovim_state(registry.get_server('neovim'))
+    end
+end
+
+---@param server_name string
+function M.unregister_server_guidance(server_name)
+    registry.unregister_server_guidance(server_name)
+
+    if server_name == 'neovim' then
+        sync_builtin_neovim_state(registry.get_server('neovim'))
+    end
+end
+
 ---@return ministry.ServerSpec[]
 function M.list_servers()
     return registry.list_servers()
@@ -456,8 +503,26 @@ function M.list_resource_descriptors()
 end
 
 ---@return table[]
+function M.list_resource_template_descriptors()
+    return registry.list_resource_template_descriptors()
+end
+
+---@return table[]
 function M.list_prompt_descriptors()
     return registry.list_prompt_descriptors()
+end
+
+---@param server_name string
+---@param context? table
+---@return string|nil
+function M.server_guidance(server_name, context)
+    return registry.server_guidance(server_name, context)
+end
+
+---@param context? table
+---@return { server: string, guidance: string }[]
+function M.list_server_guidance(context)
+    return registry.list_server_guidance(context)
 end
 
 ---@param namespaced_name string

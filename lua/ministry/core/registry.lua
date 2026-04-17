@@ -13,6 +13,20 @@ local function validate_server(server)
     assert(type(server.name) == 'string' and server.name ~= '', 'mcp server name must be a non-empty string')
 end
 
+---@param guidance unknown
+local function validate_server_guidance(guidance)
+    if guidance == nil then
+        return
+    end
+
+    assert(
+        type(guidance) == 'string'
+            or type(guidance) == 'function'
+            or (type(guidance) == 'table' and vim.islist(guidance)),
+        'mcp server guidance must be a string, string list, or function'
+    )
+end
+
 ---@param server_name string
 ---@return ministry.ServerSpec
 local function ensure_server(server_name)
@@ -25,6 +39,61 @@ end
 ---@return table[]
 local function normalized_items(items)
     return deepcopy(items or {})
+end
+
+---@param value unknown
+---@return string[]|nil
+local function normalize_guidance_blocks(value)
+    if type(value) == 'string' then
+        return value ~= '' and { value } or nil
+    end
+
+    if type(value) ~= 'table' or not vim.islist(value) then
+        return nil
+    end
+
+    local blocks = {}
+    for _, item in ipairs(value) do
+        if type(item) == 'string' and item ~= '' then
+            table.insert(blocks, item)
+        end
+    end
+
+    return #blocks > 0 and blocks or nil
+end
+
+---@param server ministry.ServerSpec
+---@param context? table
+---@return string|nil
+local function resolve_server_guidance(server, context)
+    local guidance = server.guidance
+    if guidance == nil then
+        return nil
+    end
+
+    local value = guidance
+    if type(guidance) == 'function' then
+        local ok, computed = pcall(
+            guidance,
+            vim.tbl_extend('force', context or {}, {
+                server = deepcopy(server),
+                server_name = server.name,
+            })
+        )
+
+        if not ok then
+            vim.notify(
+                string.format('Ministry server guidance provider %s failed: %s', server.name, tostring(computed)),
+                vim.log.levels.WARN
+            )
+            return nil
+        end
+
+        value = computed
+    end
+
+    local blocks = normalize_guidance_blocks(value)
+    return blocks ~= nil and table.concat(blocks, '\n\n') or nil
 end
 
 ---@param tool ministry.ToolSpec
@@ -151,6 +220,7 @@ end
 ---@return ministry.ServerSpec
 function M.register_server(server)
     validate_server(server)
+    validate_server_guidance(server.guidance)
 
     local resources = normalized_items(server.resources)
     for _, resource in ipairs(resources) do
@@ -171,6 +241,7 @@ function M.register_server(server)
         name = server.name,
         title = server.title,
         description = server.description,
+        guidance = server.guidance,
         tools = normalize_tools(server.tools),
         resources = resources,
         resource_templates = resource_templates,
@@ -337,6 +408,46 @@ function M.unregister_prompt(server_name, prompt_name)
     server.prompts = retained
 end
 
+---@param server_name string
+---@param guidance string|string[]|fun(ctx: table): string|string[]|nil
+function M.register_server_guidance(server_name, guidance)
+    local server = ensure_server(server_name)
+    validate_server_guidance(guidance)
+    server.guidance = guidance
+end
+
+---@param server_name string
+function M.unregister_server_guidance(server_name)
+    local server = ensure_server(server_name)
+    server.guidance = nil
+end
+
+---@param server_name string
+---@param context? table
+---@return string|nil
+function M.server_guidance(server_name, context)
+    local server = ensure_server(server_name)
+    return resolve_server_guidance(server, context)
+end
+
+---@param context? table
+---@return { server: string, guidance: string }[]
+function M.list_server_guidance(context)
+    local descriptors = {}
+
+    for _, server in ipairs(M.list_servers()) do
+        local guidance = resolve_server_guidance(server, context)
+        if guidance ~= nil then
+            table.insert(descriptors, {
+                server = server.name,
+                guidance = guidance,
+            })
+        end
+    end
+
+    return descriptors
+end
+
 ---@return table[]
 function M.list_tool_descriptors()
     local descriptors = {}
@@ -468,6 +579,61 @@ function M.list_resource_template_descriptors()
     end)
 
     return descriptors
+end
+
+local function template_pattern(uri_template)
+    local keys = {}
+    local pattern = '^' .. uri_template:gsub('%{([%w_]+)%}', function(key)
+        table.insert(keys, key)
+        return '([^/]+)'
+    end) .. '$'
+
+    return pattern, keys
+end
+
+---@param namespaced_uri string
+---@return ministry.ResourceTemplateSpec?, table|nil, string?
+function M.find_resource_template(namespaced_uri)
+    assert(
+        type(namespaced_uri) == 'string' and namespaced_uri ~= '',
+        'namespaced resource template uri must be a non-empty string'
+    )
+
+    local best_match = nil
+
+    for _, server in ipairs(M.list_servers()) do
+        local prefix = server.name .. '/'
+        if vim.startswith(namespaced_uri, prefix) then
+            local uri = namespaced_uri:sub(#prefix + 1)
+
+            for _, resource_template in ipairs(server.resource_templates or {}) do
+                local pattern, keys = template_pattern(resource_template.uri_template)
+                local captures = { uri:match(pattern) }
+                if #captures > 0 then
+                    local arguments = {}
+                    for index, key in ipairs(keys) do
+                        arguments[key] = captures[index]
+                    end
+
+                    local match = {
+                        template = deepcopy(resource_template),
+                        arguments = arguments,
+                        score = #prefix,
+                    }
+
+                    if best_match == nil or match.score > best_match.score then
+                        best_match = match
+                    end
+                end
+            end
+        end
+    end
+
+    if best_match ~= nil then
+        return best_match.template, best_match.arguments, nil
+    end
+
+    return nil, nil, string.format('Unknown resource template for uri: %s', namespaced_uri)
 end
 
 ---@param namespaced_name string

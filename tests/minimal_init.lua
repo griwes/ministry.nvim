@@ -21,7 +21,35 @@ vim.opt.runtimepath:prepend(lazypath)
 require('lazy').setup({
     { dir = vim.fn.getcwd(), lazy = false },
     { 'nvim-lua/plenary.nvim', lazy = false },
+    { 'andythigpen/nvim-coverage', lazy = false },
+    { 'stevearc/conform.nvim', lazy = false },
+    { 'williamboman/mason.nvim', lazy = false },
+    { 'mfussenegger/nvim-dap', lazy = false },
+    { 'mfussenegger/nvim-lint', lazy = false },
+    { 'stevearc/overseer.nvim', lazy = false },
 }, {
     root = vim.fn.stdpath('data') .. '/lazy',
     lockfile = vim.fn.stdpath('state') .. '/lazy-lock.json',
+    headless = {
+        process = false,
+        log = false,
+        task = false,
+        colors = false,
+    },
 })
+
+pcall(require, 'dap')
+pcall(require, 'conform')
+pcall(require, 'mason')
+pcall(require, 'lint')
+pcall(require, 'overseer')
+
+local lazy_config_ok, lazy_config = pcall(require, 'lazy.core.config')
+if lazy_config_ok and type(lazy_config.options) == 'table' then
+    lazy_config.options.headless = vim.tbl_extend('force', {
+        process = false,
+        log = false,
+        task = false,
+        colors = false,
+    }, lazy_config.options.headless or {})
+end
