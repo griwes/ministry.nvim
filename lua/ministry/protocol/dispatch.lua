@@ -1,4 +1,5 @@
 local registry = require('ministry.core.registry')
+local approval = require('ministry.approval.policy')
 
 local M = {}
 
@@ -16,7 +17,14 @@ function M.call_tool(namespaced_name, arguments, context)
         }
     end
 
-    local packed = { pcall(tool.handler, arguments or {}, context or {}) }
+    local call_arguments = arguments or {}
+    local call_context = context or {}
+    local approved, approval_error = approval.check_tool(namespaced_name, call_arguments, call_context)
+    if not approved then
+        return nil, approval_error
+    end
+
+    local packed = { pcall(tool.handler, call_arguments, call_context) }
     local ok = packed[1]
     local result = packed[2]
     local handler_error = packed[3]

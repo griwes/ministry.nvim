@@ -11,8 +11,10 @@ local builtin_overseer = require('ministry.builtin.overseer.init')
 local builtin_quickfix = require('ministry.builtin.quickfix.init')
 local builtin_terminal = require('ministry.builtin.terminal')
 local builtin_terminal_runtime = require('ministry.builtin.terminal_runtime')
+local approval = require('ministry.approval.policy')
 local dispatch = require('ministry.protocol.dispatch')
 local endpoint = require('ministry.transport.endpoint')
+local external = require('ministry.external.manager')
 local list_attachments = require('ministry.resources.list_providers')
 local registry = require('ministry.core.registry')
 local router = require('ministry.protocol.router')
@@ -24,6 +26,7 @@ local M = {}
 
 local builtin_neovim_overrides = nil
 local builtin_neovim_mode = 'builtin'
+local commands_registered = false
 local merge_named_specs
 
 local function socket_transport_supported()
@@ -48,7 +51,8 @@ local function builtin_neovim_server_spec()
         editor = builtin_editor.tools_tree(),
         lsp = builtin_lsp.tools_tree(),
     }
-    local resources = merge_named_specs(builtin_coverage.server_spec().resources, builtin_dap.server_spec().resources, 'uri')
+    local resources =
+        merge_named_specs(builtin_coverage.server_spec().resources, builtin_dap.server_spec().resources, 'uri')
     resources = merge_named_specs(resources, builtin_lsp.server_spec().resources, 'uri')
     resources = merge_named_specs(builtin_formatting.server_spec().resources, resources, 'uri')
     resources = merge_named_specs(builtin_lint.server_spec().resources, resources, 'uri')
@@ -57,8 +61,11 @@ local function builtin_neovim_server_spec()
     resources = merge_named_specs(builtin_overseer.server_spec().resources, resources, 'uri')
     resources = merge_named_specs(builtin_quickfix.server_spec().resources, resources, 'uri')
     resources = merge_named_specs(resources, editor_server.resources, 'uri')
-    local resource_templates =
-        merge_named_specs(builtin_dap.server_spec().resource_templates, editor_server.resource_templates, 'uri_template')
+    local resource_templates = merge_named_specs(
+        builtin_dap.server_spec().resource_templates,
+        editor_server.resource_templates,
+        'uri_template'
+    )
 
     if applied.enable_terminal_tools then
         tools.terminal = builtin_terminal.tools_tree()
@@ -313,12 +320,50 @@ local function register_builtin_neovim_server(existing)
     })
 end
 
+local function register_commands()
+    if commands_registered then
+        return
+    end
+
+    vim.api.nvim_create_user_command('MinistryServers', function()
+        M.open_servers()
+    end, {})
+
+    vim.api.nvim_create_user_command('MinistryApprove', function(command)
+        local server, method = command.args:match('^(%S+)%s*(.*)$')
+        if server ~= nil then
+            M.set_approval(server, method ~= '' and method or nil, 'allow')
+        end
+    end, { nargs = '+' })
+
+    vim.api.nvim_create_user_command('MinistryReject', function(command)
+        local server, method = command.args:match('^(%S+)%s*(.*)$')
+        if server ~= nil then
+            M.set_approval(server, method ~= '' and method or nil, 'reject')
+        end
+    end, { nargs = '+' })
+
+    vim.api.nvim_create_user_command('MinistryAsk', function(command)
+        local server, method = command.args:match('^(%S+)%s*(.*)$')
+        if server ~= nil then
+            M.set_approval(server, method ~= '' and method or nil, 'ask')
+        end
+    end, { nargs = '+' })
+
+    commands_registered = true
+end
+
 ---@param opts? Partial<ministry.Config>
 ---@return ministry.Config
 function M.setup(opts)
     local applied = config.set(opts)
 
+    approval.load()
     register_builtin_neovim_server(builtin_neovim_overrides)
+    register_commands()
+    if applied.external.enabled then
+        external.discover()
+    end
 
     if applied.auto_start then
         local transport = applied.transport or 'socket'
@@ -366,6 +411,73 @@ function M.unregister_server(server_name)
         builtin_neovim_overrides = nil
         builtin_neovim_mode = 'builtin'
     end
+end
+
+---@return ministry.ExternalRuntime[], table[]
+function M.refresh_external_servers()
+    return external.refresh()
+end
+
+---@return ministry.ServerStatus[]
+function M.list_server_statuses()
+    local statuses = {}
+    local external_by_name = {}
+
+    for _, runtime in ipairs(external.list_runtimes()) do
+        external_by_name[runtime.spec.name] = runtime
+        table.insert(statuses, {
+            name = runtime.spec.name,
+            source = runtime.spec.source,
+            transport = runtime.spec.transport,
+            command = runtime.spec.command,
+            args = runtime.spec.args,
+            url = runtime.spec.url,
+            state = runtime.state,
+            error = runtime.error,
+            policy = approval.summary(runtime.spec.name),
+        })
+    end
+
+    for _, server_spec in ipairs(registry.list_servers()) do
+        if external_by_name[server_spec.name] == nil then
+            local source = server_spec.ministry_source
+                or {
+                    kind = 'native',
+                    name = 'neovim',
+                }
+            table.insert(statuses, {
+                name = server_spec.name,
+                source = source,
+                transport = 'native',
+                state = 'ready',
+                policy = approval.summary(server_spec.name),
+            })
+        end
+    end
+
+    table.sort(statuses, function(left, right)
+        return left.name < right.name
+    end)
+
+    return statuses
+end
+
+---@param server string
+---@param method string|nil
+---@return ministry.ApprovalDecision
+function M.get_approval(server, method)
+    return approval.get(server, method)
+end
+
+---@param server string
+---@param method string|nil
+---@param decision ministry.ApprovalDecision
+function M.set_approval(server, method, decision)
+    approval.set(server, method, decision)
+end
+
+function M.open_servers()
+    require('ministry.ui.servers').open(M.list_server_statuses())
 end
 
 ---@param server_name string
@@ -605,6 +717,8 @@ function M.reset()
     server.stop()
     http_server.stop()
     builtin_terminal_runtime.reset()
+    external.reset()
+    approval.reset()
     endpoint.reset()
     config.reset()
     registry.reset()

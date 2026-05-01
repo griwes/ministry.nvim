@@ -46,3 +46,70 @@ Example local `lazy.nvim` spec:
 - HTTP transport requires `Authorization: Bearer <token>` on application requests; browser CORS preflight `OPTIONS` requests are allowed without auth, while non-preflight `OPTIONS` requests still require the bearer token when `http_token` is set
 
 - terminal tools execute host commands via Neovim and are disabled by default for safety
+
+## External MCP servers
+
+External server discovery is opt-in:
+
+```lua
+require('ministry').setup({
+    external = {
+        enabled = true,
+    },
+})
+```
+
+When enabled, Ministry reads MCPHub-style `mcpServers` and VS Code-style `servers`
+maps from:
+
+- `stdpath('config')/mcphub/servers.json`
+- `.mcphub/servers.json`
+- `.vscode/mcp.json`
+- `.cursor/mcp.json`
+
+Local stdio entries use `command`, optional `args`, `env`, and `cwd`. HTTP
+entries use `url` and optional `headers`.
+
+Setup discovers external servers and makes them visible in `:MinistryServers`,
+but it does not start stdio commands. Start/refresh configured external servers
+explicitly with:
+
+```lua
+require('ministry').refresh_external_servers()
+```
+
+Stdio server activation is governed by the special method policy `__activate`.
+Allowing `github/__activate`, for example, permits Ministry to start the local
+command for the external `github` server. Once active, external tools are
+registered into the same namespaced Ministry surface as native servers, so an
+external server named `github` with a tool named `search` is advertised as
+`github/search`.
+
+## Approvals and inspection
+
+Approvals are disabled by default. Enable them with:
+
+```lua
+require('ministry').setup({
+    approval = {
+        enabled = true,
+        default = 'ask',
+    },
+})
+```
+
+Policies are resolved as method rule, then server default, then global default.
+Supported decisions are `allow`, `reject`, and `ask`. Persistent policy is stored
+under `stdpath('state')/ministry/approvals.json` unless `approval.path` overrides
+it or `approval.persistence = false`.
+
+Useful commands:
+
+- `:MinistryServers` opens the server inspection buffer.
+- `:MinistryApprove <server> [method]` allows a server or method.
+- `:MinistryReject <server> [method]` rejects a server or method.
+- `:MinistryAsk <server> [method]` resets a server or method to ask.
+
+The inspection buffer shows native and external servers with source, command or
+URL, state, and approval summaries. Server-level policies can also be toggled
+from that buffer with `a`, `r`, and `k`.

@@ -242,6 +242,7 @@ function M.register_server(server)
         title = server.title,
         description = server.description,
         guidance = server.guidance,
+        ministry_source = deepcopy(server.ministry_source),
         tools = normalize_tools(server.tools),
         resources = resources,
         resource_templates = resource_templates,
@@ -583,10 +584,12 @@ end
 
 local function template_pattern(uri_template)
     local keys = {}
-    local pattern = '^' .. uri_template:gsub('%{([%w_]+)%}', function(key)
-        table.insert(keys, key)
-        return '([^/]+)'
-    end) .. '$'
+    local pattern = '^'
+        .. uri_template:gsub('%{([%w_]+)%}', function(key)
+            table.insert(keys, key)
+            return '([^/]+)'
+        end)
+        .. '$'
 
     return pattern, keys
 end

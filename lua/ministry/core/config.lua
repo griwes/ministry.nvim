@@ -8,6 +8,32 @@ local defaults = {
     http_token = nil,
     enable_terminal_tools = false,
     auto_start = true,
+    external = {
+        enabled = false,
+        config = nil,
+        workspace = {
+            enabled = true,
+            look_for = {
+                '.mcphub/servers.json',
+                '.vscode/mcp.json',
+                '.cursor/mcp.json',
+            },
+            reload_on_dir_changed = false,
+        },
+        request_timeout_ms = 60000,
+    },
+    approval = {
+        enabled = false,
+        default = 'ask',
+        persistence = true,
+        path = nil,
+        provider = nil,
+    },
+    ui = {
+        width = 0.8,
+        height = 0.8,
+        border = 'rounded',
+    },
 }
 
 local current = vim.deepcopy(defaults)
