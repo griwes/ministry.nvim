@@ -1,5 +1,7 @@
 local M = {}
 
+local MAX_ERROR_DETAIL_BYTES = 500
+
 ---@class ministry.HttpRequestMeta
 ---@field session_id? string
 ---@field status? integer
@@ -11,6 +13,90 @@ local M = {}
 
 ---@type fun(spec: ministry.ExternalServerSpec, payload: table, timeout_ms: integer, opts?: ministry.HttpRequestOpts): table?, table?, ministry.HttpRequestMeta?
 local request_impl
+
+---@param value any
+---@return string
+local function compact_text(value)
+    if value == nil then
+        return ''
+    end
+
+    local text = vim.trim(tostring(value))
+    text = text:gsub('%s+', ' ')
+    if #text <= MAX_ERROR_DETAIL_BYTES then
+        return text
+    end
+
+    return text:sub(1, MAX_ERROR_DETAIL_BYTES) .. '...'
+end
+
+---@param ... any
+---@return string
+local function first_compact_detail(...)
+    for index = 1, select('#', ...) do
+        local detail = compact_text(select(index, ...))
+        if detail ~= '' then
+            return detail
+        end
+    end
+
+    return 'exit code unavailable'
+end
+
+---@param decoded any
+---@return string?
+local function jsonrpc_error_message(decoded)
+    if type(decoded) == 'table' and type(decoded.error) == 'table' and decoded.error.message ~= nil then
+        return compact_text(decoded.error.message)
+    end
+
+    if vim.islist(decoded) then
+        for _, item in ipairs(decoded) do
+            local message = jsonrpc_error_message(item)
+            if message ~= nil and message ~= '' then
+                return message
+            end
+        end
+    end
+
+    return nil
+end
+
+---@param body string?
+---@return string?
+local function response_error_detail(body)
+    local text = compact_text(body)
+    if text == '' then
+        return nil
+    end
+
+    local ok, decoded = pcall(vim.json.decode, body)
+    if ok then
+        local message = jsonrpc_error_message(decoded)
+        if message ~= nil and message ~= '' then
+            return 'JSON-RPC error: ' .. message
+        end
+    end
+
+    return 'response body: ' .. text
+end
+
+---@param status integer
+---@param body string?
+---@return table
+local function http_status_error(status, body)
+    local message = string.format('HTTP MCP request failed with status %d', status)
+    local detail = response_error_detail(body)
+    if detail ~= nil then
+        message = message .. ': ' .. detail
+    end
+
+    return {
+        code = -32000,
+        message = message,
+        http_status = status,
+    }
+end
 
 ---@param headers table<string, string>|nil
 ---@param session_id? string
@@ -184,10 +270,11 @@ local function curl_request(spec, payload, timeout_ms, opts)
     }):wait()
 
     if result.code ~= 0 then
+        local detail = first_compact_detail(result.stderr, result.stdout, result.code)
         return nil,
             {
                 code = -32000,
-                message = string.format('HTTP MCP request failed: %s', result.stderr or result.stdout or result.code),
+                message = string.format('HTTP MCP request failed: %s', detail),
             }
     end
 
@@ -198,13 +285,7 @@ local function curl_request(spec, payload, timeout_ms, opts)
     }
 
     if status ~= nil and (status < 200 or status >= 300) then
-        return nil,
-            {
-                code = -32000,
-                message = string.format('HTTP MCP request failed with status %d', status),
-                http_status = status,
-            },
-            meta
+        return nil, http_status_error(status, body), meta
     end
 
     if (body == nil or body == '') and opts.allow_empty_response then

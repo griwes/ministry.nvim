@@ -3,6 +3,7 @@ local builtin_coverage = require('ministry.builtin.coverage.init')
 local builtin_dap = require('ministry.builtin.dap.init')
 local builtin_editor = require('ministry.builtin.editor.init')
 local builtin_formatting = require('ministry.builtin.formatting.init')
+local builtin_git = require('ministry.builtin.git.init')
 local builtin_lint = require('ministry.builtin.lint.init')
 local builtin_lsp = require('ministry.builtin.lsp.init')
 local builtin_mason = require('ministry.builtin.mason.init')
@@ -49,12 +50,14 @@ local function builtin_neovim_server_spec()
     local tools = {
         dap = builtin_dap.tools_tree(),
         editor = builtin_editor.tools_tree(),
+        git = builtin_git.tools_tree(),
         lsp = builtin_lsp.tools_tree(),
     }
     local resources =
         merge_named_specs(builtin_coverage.server_spec().resources, builtin_dap.server_spec().resources, 'uri')
     resources = merge_named_specs(resources, builtin_lsp.server_spec().resources, 'uri')
     resources = merge_named_specs(builtin_formatting.server_spec().resources, resources, 'uri')
+    resources = merge_named_specs(builtin_git.server_spec().resources, resources, 'uri')
     resources = merge_named_specs(builtin_lint.server_spec().resources, resources, 'uri')
     resources = merge_named_specs(builtin_mason.server_spec().resources, resources, 'uri')
     resources = merge_named_specs(builtin_navigation.server_spec().resources, resources, 'uri')
@@ -435,6 +438,7 @@ function M.list_server_statuses()
             state = runtime.state,
             error = runtime.error,
             policy = approval.summary(runtime.spec.name),
+            tools = runtime.tools,
         })
     end
 
@@ -451,6 +455,7 @@ function M.list_server_statuses()
                 transport = 'native',
                 state = 'ready',
                 policy = approval.summary(server_spec.name),
+                tools = server_spec.tools,
             })
         end
     end

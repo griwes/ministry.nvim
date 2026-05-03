@@ -107,6 +107,7 @@
 ---@field state string
 ---@field error? string
 ---@field policy table
+---@field tools? { name: string, description?: string }[]
 
 ---@class ministry.Config
 ---@field socket_prefix string

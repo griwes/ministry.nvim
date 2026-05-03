@@ -206,6 +206,54 @@ describe('mcp discovery and approvals', function()
         assert.is_true(h2_body:find('"id":4', 1, true) ~= nil)
     end)
 
+    it('surfaces HTTP status response body details through server inspection', function()
+        local root = assert(vim.uv.fs_mkdtemp(vim.fs.joinpath(vim.uv.os_tmpdir(), 'ministry-http-XXXXXX')))
+        local curl_path = vim.fs.joinpath(root, 'curl')
+        vim.fn.writefile({
+            '#!/bin/sh',
+            'cat >/dev/null',
+            [[printf '%b' 'HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\n\r\n{"jsonrpc":"2.0","id":1,"error":{"code":-32001,"message":"missing bearer token"}}']],
+        }, curl_path)
+        vim.fn.setfperm(curl_path, 'rwx------')
+
+        local old_path = vim.env.PATH
+        vim.env.PATH = root .. ':' .. old_path
+
+        local ok, err = xpcall(function()
+            require('ministry').setup({ auto_start = false })
+            local runtimes, errors = require('ministry.external.manager').refresh({
+                specs = {
+                    {
+                        name = 'remote',
+                        transport = 'http',
+                        url = 'http://127.0.0.1:9999/mcp',
+                        source = { kind = 'config', name = 'servers', path = '/tmp/mcp.json' },
+                    },
+                },
+            })
+
+            assert.are.equal(1, #errors)
+            assert.are.equal('error', runtimes[1].state)
+            assert.is_true(errors[1].message:find('HTTP MCP request failed with status 401', 1, true) ~= nil)
+            assert.is_true(errors[1].message:find('JSON-RPC error: missing bearer token', 1, true) ~= nil)
+
+            local rendered = table.concat(
+                require('ministry.ui.servers').render_lines(require('ministry').list_server_statuses()),
+                '\n'
+            )
+            assert.is_true(rendered:find('error=', 1, true) ~= nil)
+            assert.is_true(rendered:find('missing bearer token', 1, true) ~= nil)
+        end, function(message)
+            return debug.traceback(message, 2)
+        end)
+
+        vim.env.PATH = old_path
+        vim.fn.delete(root, 'rf')
+        if not ok then
+            error(err)
+        end
+    end)
+
     it('reinitializes HTTP servers when a session-bound request returns 404', function()
         local http = require('ministry.external.http')
         local calls = {}
@@ -433,6 +481,52 @@ describe('mcp discovery and approvals', function()
         vim.fn.delete(root, 'rf')
     end)
 
+    it('surfaces stdio stderr when a server exits during initialization', function()
+        local root = vim.fn.tempname()
+        vim.fn.mkdir(root, 'p')
+        local server_path = vim.fs.joinpath(root, 'failing-stdio-server.lua')
+        vim.fn.writefile({
+            'io.stderr:write("bootstrap failed: missing token\\n")',
+            'io.stderr:flush()',
+            'os.exit(7)',
+        }, server_path)
+
+        local plugin = require('ministry')
+        plugin.setup({
+            auto_start = false,
+            external = {
+                request_timeout_ms = 5000,
+            },
+        })
+        plugin.set_approval('broken', '__activate', 'allow')
+
+        local runtimes, errors = require('ministry.external.manager').refresh({
+            specs = {
+                {
+                    name = 'broken',
+                    transport = 'stdio',
+                    command = vim.v.progpath,
+                    args = { '--headless', '-u', 'NONE', '-l', server_path },
+                    source = { kind = 'config', name = 'mcpServers', path = server_path },
+                },
+            },
+        })
+
+        assert.are.equal(1, #errors)
+        assert.are.equal('error', runtimes[1].state)
+        assert.is_true(runtimes[1].error:find('exited before responding', 1, true) ~= nil)
+        assert.is_true(runtimes[1].error:find('with code 7', 1, true) ~= nil)
+        assert.is_true(runtimes[1].error:find('bootstrap failed: missing token', 1, true) ~= nil)
+        assert.are.equal(runtimes[1].error, errors[1].message)
+
+        local rendered =
+            table.concat(require('ministry.ui.servers').render_lines(require('ministry').list_server_statuses()), '\n')
+        assert.is_true(rendered:find('error=', 1, true) ~= nil)
+        assert.is_true(rendered:find('bootstrap failed: missing token', 1, true) ~= nil)
+
+        vim.fn.delete(root, 'rf')
+    end)
+
     it('discovers external servers during setup without activating stdio commands', function()
         local root = vim.fn.tempname()
         local marker = vim.fs.joinpath(root, 'started')
@@ -577,5 +671,75 @@ describe('mcp discovery and approvals', function()
         assert.is_true(text:find('remote', 1, true) ~= nil)
         assert.is_true(text:find('http://127.0.0.1:9999/mcp', 1, true) ~= nil)
         assert.is_true(text:find('allow=1', 1, true) ~= nil)
+    end)
+
+    it('renders server and method approval targets for the inspection UI', function()
+        local ui = require('ministry.ui.servers')
+        local statuses = {
+            {
+                name = 'local',
+                source = { kind = 'config', path = '/tmp/servers.json' },
+                transport = 'stdio',
+                command = 'node',
+                args = { 'server.js' },
+                state = 'configured',
+                policy = {
+                    default = 'ask',
+                    allow = 1,
+                    reject = 1,
+                    ask = 0,
+                    tools = {
+                        __activate = 'allow',
+                        echo = 'reject',
+                        policy_only = 'allow',
+                    },
+                },
+                tools = {
+                    { name = 'echo' },
+                    { name = 'inspect' },
+                },
+            },
+        }
+
+        local lines = ui.render_lines(statuses)
+        local text = table.concat(lines, '\n')
+
+        assert.is_true(text:find('method=__activate  policy=allow', 1, true) ~= nil)
+        assert.is_true(text:find('method=echo  policy=reject', 1, true) ~= nil)
+        assert.is_true(text:find('method=inspect  policy=ask inherited', 1, true) ~= nil)
+        assert.is_true(text:find('method=policy_only  policy=allow', 1, true) ~= nil)
+        assert.are.same({ server = 'local' }, ui._target_at_line(statuses, 5))
+        assert.are.same({ server = 'local', method = '__activate' }, ui._target_at_line(statuses, 7))
+        assert.are.same({ server = 'local', method = 'echo' }, ui._target_at_line(statuses, 8))
+        assert.are.same({ server = 'local', method = 'inspect' }, ui._target_at_line(statuses, 9))
+        assert.are.same({ server = 'local', method = 'policy_only' }, ui._target_at_line(statuses, 10))
+    end)
+
+    it('updates method approvals from the inspection UI keymaps', function()
+        local plugin = require('ministry')
+        plugin.setup({
+            auto_start = false,
+            approval = {
+                enabled = true,
+                default = 'ask',
+                persistence = false,
+            },
+        })
+        require('ministry.external.manager').configure({
+            {
+                name = 'local',
+                source = { kind = 'config', path = '/tmp/servers.json' },
+                transport = 'stdio',
+                command = 'node',
+                args = { 'server.js' },
+            },
+        })
+        plugin.set_approval('local', 'echo', 'reject')
+
+        require('ministry.ui.servers').open(plugin.list_server_statuses())
+        vim.api.nvim_win_set_cursor(0, { 8, 0 })
+        vim.api.nvim_feedkeys('a', 'x', false)
+
+        assert.are.equal('allow', plugin.get_approval('local', 'echo'))
     end)
 end)

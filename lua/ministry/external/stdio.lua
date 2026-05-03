@@ -6,11 +6,14 @@ local M = {}
 ---@field stdout string
 ---@field pending table<integer, table>
 ---@field stderr string[]
+---@field exited boolean
+---@field exit_code? integer
 
 ---@type table<string, ministry.StdioClient>
 local clients = {}
 
 local handle_line
+local max_stderr_summary = 400
 
 ---@param data string[]|nil
 ---@return string[]
@@ -22,6 +25,20 @@ local function compact_data(data)
         end
     end
     return chunks
+end
+
+---@param client ministry.StdioClient
+---@return string
+local function stderr_summary(client)
+    local stderr = table.concat(client.stderr or {}, '\n')
+    if stderr == '' then
+        return ''
+    end
+    stderr = vim.trim(stderr)
+    if #stderr > max_stderr_summary then
+        stderr = stderr:sub(1, max_stderr_summary) .. '...'
+    end
+    return string.format(': stderr: %s', stderr)
 end
 
 ---@param client ministry.StdioClient
@@ -84,6 +101,7 @@ function M.start(spec)
         stdout = '',
         pending = {},
         stderr = {},
+        exited = false,
     }
 
     local job = vim.fn.jobstart(command, {
@@ -98,7 +116,9 @@ function M.start(spec)
         on_stderr = function(_, data)
             vim.list_extend(client.stderr, compact_data(data))
         end,
-        on_exit = function()
+        on_exit = function(_, exit_code)
+            client.exited = true
+            client.exit_code = exit_code
             clients[spec.name] = nil
         end,
     })
@@ -134,8 +154,12 @@ function M.request(spec, payload, timeout_ms)
 
     vim.fn.chansend(client.job, vim.json.encode(payload) .. '\n')
 
-    local ok = vim.wait(timeout_ms, function()
+    local function has_response()
         return client.pending[id] ~= nil and client.pending[id].response ~= nil
+    end
+
+    local ok = vim.wait(timeout_ms, function()
+        return client.exited or has_response()
     end, 10)
 
     if not ok then
@@ -143,8 +167,16 @@ function M.request(spec, payload, timeout_ms)
         return nil,
             {
                 code = -32000,
-                message = string.format('Timed out waiting for stdio MCP server %s', spec.name),
+                message = string.format(
+                    'Timed out waiting for stdio MCP server %s%s',
+                    spec.name,
+                    stderr_summary(client)
+                ),
             }
+    end
+
+    if client.exited and not has_response() then
+        vim.wait(50, has_response, 1)
     end
 
     local pending = client.pending[id]
@@ -152,6 +184,18 @@ function M.request(spec, payload, timeout_ms)
     client.pending[id] = nil
 
     if response == nil then
+        if client.exited then
+            return nil,
+                {
+                    code = -32000,
+                    message = string.format(
+                        'stdio MCP server %s exited before responding%s%s',
+                        spec.name,
+                        client.exit_code ~= nil and string.format(' with code %s', client.exit_code) or '',
+                        stderr_summary(client)
+                    ),
+                }
+        end
         return nil,
             {
                 code = -32000,
