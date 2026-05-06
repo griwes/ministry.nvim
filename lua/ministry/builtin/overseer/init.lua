@@ -9,6 +9,11 @@ function M.server_spec()
         title = 'Tasks',
         description = 'Built-in generic Overseer task observation surfaces.',
         resources = resources.specs(),
+        namespaces = {
+            resources = {
+                tasks = 'Generic Overseer task state.',
+            },
+        },
     }
 end
 

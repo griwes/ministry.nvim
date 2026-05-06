@@ -9,6 +9,11 @@ function M.server_spec()
         title = 'Formatting',
         description = 'Built-in formatter configuration observation surfaces.',
         resources = resources.specs(),
+        namespaces = {
+            resources = {
+                formatting = 'Formatter configuration for the current buffer filetype.',
+            },
+        },
     }
 end
 

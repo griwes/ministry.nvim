@@ -41,6 +41,34 @@ local function normalized_items(items)
     return deepcopy(items or {})
 end
 
+---@param namespaces ministry.NamespaceDescriptions?
+---@return ministry.NamespaceDescriptions?
+local function normalize_namespaces(namespaces)
+    if namespaces == nil then
+        return nil
+    end
+
+    assert(type(namespaces) == 'table', 'mcp server namespaces must be a table')
+    local normalized = {}
+    for _, group in ipairs({ 'tools', 'resources', 'resource_templates', 'prompts' }) do
+        local descriptions = namespaces[group]
+        if descriptions ~= nil then
+            assert(type(descriptions) == 'table', string.format('mcp server namespaces.%s must be a table', group))
+            normalized[group] = {}
+            for key, description in pairs(descriptions) do
+                assert(type(key) == 'string', string.format('mcp server namespaces.%s keys must be strings', group))
+                assert(
+                    type(description) == 'string',
+                    string.format('mcp server namespaces.%s descriptions must be strings', group)
+                )
+                normalized[group][key] = description
+            end
+        end
+    end
+
+    return normalized
+end
+
 ---@param value unknown
 ---@return string[]|nil
 local function normalize_guidance_blocks(value)
@@ -247,6 +275,7 @@ function M.register_server(server)
         resources = resources,
         resource_templates = resource_templates,
         prompts = prompts,
+        namespaces = normalize_namespaces(server.namespaces),
     }
 
     servers[server.name] = normalized

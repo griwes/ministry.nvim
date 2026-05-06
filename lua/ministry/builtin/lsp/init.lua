@@ -11,6 +11,11 @@ function M.server_spec()
         description = 'Built-in Neovim LSP information surfaces.',
         tools = tools.specs(),
         resources = resources.specs(),
+        namespaces = {
+            resources = {
+                lsp = 'Active Neovim LSP clients and current-buffer LSP state.',
+            },
+        },
     }
 end
 

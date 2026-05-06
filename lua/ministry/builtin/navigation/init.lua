@@ -9,6 +9,11 @@ function M.server_spec()
         title = 'Navigation',
         description = 'Built-in Neovim navigation-anchor observation surfaces.',
         resources = resources.specs(),
+        namespaces = {
+            resources = {
+                navigation = 'Builtin Neovim mark and navigation anchors.',
+            },
+        },
     }
 end
 

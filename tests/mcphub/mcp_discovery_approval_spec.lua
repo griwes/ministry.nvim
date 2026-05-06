@@ -9,6 +9,56 @@ describe('mcp discovery and approvals', function()
         vim.fn.writefile({ vim.json.encode(value) }, path)
     end
 
+    local function mkdtemp(prefix)
+        return assert(vim.uv.fs_mkdtemp(vim.fs.joinpath(vim.uv.os_tmpdir(), prefix .. '-XXXXXX')))
+    end
+
+    local function wait_for_file(path)
+        local ready = vim.wait(5000, function()
+            return vim.fn.filereadable(path) == 1
+        end, 10)
+
+        assert.is_true(ready)
+    end
+
+    local function write_stdio_echo_server(root)
+        local server_path = vim.fs.joinpath(root, 'stdio-server.lua')
+        vim.fn.writefile({
+            'local tools = { { name = "echo", inputSchema = { type = "object" } } }',
+            'for line in io.lines() do',
+            '  local request = vim.json.decode(line)',
+            '  local response',
+            '  if request.method == "initialize" then',
+            '    response = { jsonrpc = "2.0", id = request.id, result = { protocolVersion = "2025-06-18" } }',
+            '  elseif request.method == "tools/list" then',
+            '    response = { jsonrpc = "2.0", id = request.id, result = { tools = tools } }',
+            '  elseif request.method == "tools/call" then',
+            '    response = { jsonrpc = "2.0", id = request.id, result = { content = { { type = "text", text = request.params.arguments.message } } } }',
+            '  else',
+            '    response = { jsonrpc = "2.0", id = request.id, error = { code = -32601, message = "unexpected" } }',
+            '  end',
+            '  if response.id ~= nil then',
+            '    io.stdout:write(vim.json.encode(response) .. "\\n")',
+            '    io.stdout:flush()',
+            '  end',
+            'end',
+        }, server_path)
+
+        return server_path
+    end
+
+    local function write_stdio_launcher(path, server_path)
+        vim.fn.writefile({
+            '#!/usr/bin/env sh',
+            string.format(
+                'exec %s --headless -u NONE -l %s',
+                vim.fn.shellescape(vim.v.progpath),
+                vim.fn.shellescape(server_path)
+            ),
+        }, path)
+        vim.fn.setfperm(path, 'rwx------')
+    end
+
     it('discovers mcphub and vscode server config shapes', function()
         local root = vim.fn.tempname()
         local mcphub_path = vim.fs.joinpath(root, '.mcphub', 'servers.json')
@@ -132,6 +182,51 @@ describe('mcp discovery and approvals', function()
                 },
                     nil
             end
+            if payload.method == 'resources/list' then
+                assert.are.equal('session-1', opts.session_id)
+                return {
+                    result = {
+                        resources = {
+                            {
+                                uri = 'project/summary',
+                                name = 'summary',
+                                description = 'Project summary',
+                                mimeType = 'application/json',
+                            },
+                        },
+                    },
+                },
+                    nil
+            end
+            if payload.method == 'resources/templates/list' then
+                assert.are.equal('session-1', opts.session_id)
+                return {
+                    result = {
+                        resourceTemplates = {
+                            {
+                                name = 'project-file',
+                                uriTemplate = 'project/{path}',
+                                description = 'Project file by path',
+                            },
+                        },
+                    },
+                },
+                    nil
+            end
+            if payload.method == 'prompts/list' then
+                assert.are.equal('session-1', opts.session_id)
+                return {
+                    result = {
+                        prompts = {
+                            {
+                                name = 'review',
+                                description = 'Review the project',
+                            },
+                        },
+                    },
+                },
+                    nil
+            end
             if payload.method == 'tools/call' then
                 assert.are.equal('session-1', opts.session_id)
                 return {
@@ -172,10 +267,193 @@ describe('mcp discovery and approvals', function()
         end)
         assert.is_not_nil(descriptor)
 
+        local resource = vim.iter(plugin.list_resource_descriptors()):find(function(item)
+            return item.namespaced_uri == 'remote/project/summary'
+        end)
+        local resource_template = vim.iter(plugin.list_resource_template_descriptors()):find(function(item)
+            return item.namespaced_uri_template == 'remote/project/{path}'
+        end)
+        local prompt = vim.iter(plugin.list_prompt_descriptors()):find(function(item)
+            return item.namespaced_name == 'remote/review'
+        end)
+        assert.is_not_nil(resource)
+        assert.are.equal('Project summary', resource.description)
+        assert.is_not_nil(resource_template)
+        assert.are.equal('Project file by path', resource_template.description)
+        assert.is_not_nil(prompt)
+        assert.are.equal('Review the project', prompt.description)
+
         local result, err = plugin.call_tool('remote/echo', { message = 'hello' }, {})
         assert.is_nil(err)
         assert.are.equal('hello', result.content[1].text)
-        assert.are.same({ 'initialize', 'notifications/initialized', 'tools/list', 'tools/call' }, calls)
+        assert.are.same({
+            'initialize',
+            'notifications/initialized',
+            'tools/list',
+            'resources/list',
+            'resources/templates/list',
+            'prompts/list',
+            'tools/call',
+        }, calls)
+    end)
+
+    it('proxies a real loopback HTTP MCP server with headers and auth', function()
+        local root = mkdtemp('ministry-live-http')
+        local server_path = vim.fs.joinpath(root, 'http-server.lua')
+        local port_path = vim.fs.joinpath(root, 'port')
+        local log_path = vim.fs.joinpath(root, 'requests.log')
+
+        vim.fn.writefile({
+            'local port_path = assert(vim.env.MINISTRY_HTTP_PORT_FILE)',
+            'local log_path = assert(vim.env.MINISTRY_HTTP_LOG_FILE)',
+            'local server = assert(vim.uv.new_tcp())',
+            'assert(server:bind("127.0.0.1", 0))',
+            'local address = assert(server:getsockname())',
+            'vim.fn.writefile({ tostring(address.port) }, port_path)',
+            'local function parse_headers(text)',
+            '  local headers = {}',
+            '  for line in text:gmatch("[^\\r\\n]+") do',
+            '    local name, value = line:match("^([^:]+):%s*(.*)$")',
+            '    if name then headers[name:lower()] = value end',
+            '  end',
+            '  return headers',
+            'end',
+            'local function json_response(id, result, headers)',
+            '  local body = vim.json.encode({ jsonrpc = "2.0", id = id, result = result or {} })',
+            '  local response_headers = {',
+            '    "HTTP/1.1 200 OK",',
+            '    "Content-Type: application/json",',
+            '    "Content-Length: " .. #body,',
+            '    "Connection: close",',
+            '  }',
+            '  for name, value in pairs(headers or {}) do',
+            '    table.insert(response_headers, name .. ": " .. value)',
+            '  end',
+            '  return table.concat(response_headers, "\\r\\n") .. "\\r\\n\\r\\n" .. body',
+            'end',
+            'local function empty_response()',
+            '  return table.concat({',
+            '    "HTTP/1.1 204 No Content",',
+            '    "Content-Length: 0",',
+            '    "Connection: close",',
+            '  }, "\\r\\n") .. "\\r\\n\\r\\n"',
+            'end',
+            'local function handle(payload, headers)',
+            '  local log = assert(io.open(log_path, "a"))',
+            '  log:write(vim.json.encode({',
+            '    method = payload.method,',
+            '    authorization = headers.authorization,',
+            '    custom = headers["x-ministry-test"],',
+            '    session = headers["mcp-session-id"],',
+            '  }) .. "\\n")',
+            '  log:close()',
+            '  if headers.authorization ~= "Bearer secret-token" then',
+            '    return json_response(payload.id, nil)',
+            '  end',
+            '  if payload.method == "initialize" then',
+            '    return json_response(payload.id, { protocolVersion = "2025-06-18" }, { ["Mcp-Session-Id"] = "session-live" })',
+            '  elseif payload.method == "notifications/initialized" then',
+            '    return empty_response()',
+            '  elseif payload.method == "tools/list" then',
+            '    return json_response(payload.id, { tools = { { name = "echo", description = "Echo arguments", inputSchema = { type = "object" } } } })',
+            '  elseif payload.method == "resources/list" then',
+            '    return json_response(payload.id, { resources = { { uri = "workspace/summary", description = "Workspace summary" } } })',
+            '  elseif payload.method == "resources/templates/list" then',
+            '    return json_response(payload.id, { resourceTemplates = { { uriTemplate = "workspace/{path}", description = "Workspace path" } } })',
+            '  elseif payload.method == "prompts/list" then',
+            '    return json_response(payload.id, { prompts = { { name = "review", description = "Review prompt" } } })',
+            '  elseif payload.method == "tools/call" then',
+            '    return json_response(payload.id, { content = { { type = "text", text = payload.params.arguments.message } } })',
+            '  end',
+            '  return json_response(payload.id, {})',
+            'end',
+            'server:listen(64, function(err)',
+            '  assert(not err, err)',
+            '  local client = assert(vim.uv.new_tcp())',
+            '  server:accept(client)',
+            '  local buffer = ""',
+            '  client:read_start(function(read_err, chunk)',
+            '    assert(not read_err, read_err)',
+            '    if not chunk then return end',
+            '    buffer = buffer .. chunk',
+            '    local header_start, header_end = buffer:find("\\r\\n\\r\\n", 1, true)',
+            '    if not header_start then return end',
+            '    local header_text = buffer:sub(1, header_start - 1)',
+            '    local headers = parse_headers(header_text)',
+            '    local length = tonumber(headers["content-length"] or "0") or 0',
+            '    local body_start = header_end + 1',
+            '    if #buffer - body_start + 1 < length then return end',
+            '    local payload = vim.json.decode(buffer:sub(body_start, body_start + length - 1))',
+            '    client:read_stop()',
+            '    client:write(handle(payload, headers), function()',
+            '      client:shutdown(function() client:close() end)',
+            '    end)',
+            '  end)',
+            'end)',
+            'vim.wait(600000, function() return false end, 100)',
+        }, server_path)
+
+        local process = vim.system({
+            vim.v.progpath,
+            '--headless',
+            '--clean',
+            '-l',
+            server_path,
+        }, {
+            text = true,
+            env = vim.tbl_extend('force', vim.fn.environ(), {
+                MINISTRY_HTTP_PORT_FILE = port_path,
+                MINISTRY_HTTP_LOG_FILE = log_path,
+            }),
+        })
+
+        local ok, err = xpcall(function()
+            wait_for_file(port_path)
+            local port = tonumber(vim.fn.readfile(port_path)[1])
+            assert.is_not_nil(port)
+
+            local plugin = require('ministry')
+            plugin.setup({ auto_start = false })
+            local runtimes, errors = require('ministry.external.manager').refresh({
+                specs = {
+                    {
+                        name = 'remote',
+                        transport = 'http',
+                        url = string.format('http://127.0.0.1:%d/mcp', port),
+                        headers = {
+                            Authorization = 'Bearer secret-token',
+                            ['X-Ministry-Test'] = 'present',
+                        },
+                        source = { kind = 'config', name = 'mcpServers', path = server_path },
+                    },
+                },
+            })
+
+            assert.are.equal(0, #errors)
+            assert.are.equal('ready', runtimes[1].state)
+
+            local result, call_err = plugin.call_tool('remote/echo', { message = 'loopback' }, {})
+            assert.is_nil(call_err)
+            assert.are.equal('loopback', result.content[1].text)
+
+            local requests = vim.tbl_map(function(line)
+                return vim.json.decode(line)
+            end, vim.fn.readfile(log_path))
+            assert.are.equal('initialize', requests[1].method)
+            assert.are.equal('Bearer secret-token', requests[1].authorization)
+            assert.are.equal('present', requests[1].custom)
+            assert.are.equal('tools/call', requests[#requests].method)
+            assert.are.equal('session-live', requests[#requests].session)
+        end, function(message)
+            return debug.traceback(message, 2)
+        end)
+
+        process:kill(15)
+        process:wait(1000)
+        vim.fn.delete(root, 'rf')
+        if not ok then
+            error(err)
+        end
     end)
 
     it('parses data-only SSE HTTP responses and HTTP status headers', function()
@@ -241,7 +519,7 @@ describe('mcp discovery and approvals', function()
                 require('ministry.ui.servers').render_lines(require('ministry').list_server_statuses()),
                 '\n'
             )
-            assert.is_true(rendered:find('error=', 1, true) ~= nil)
+            assert.is_true(rendered:find('Error', 1, true) ~= nil)
             assert.is_true(rendered:find('missing bearer token', 1, true) ~= nil)
         end, function(message)
             return debug.traceback(message, 2)
@@ -312,8 +590,8 @@ describe('mcp discovery and approvals', function()
         local result, err = plugin.call_tool('remote/echo', { message = 'after-reinit' }, {})
         assert.is_nil(err)
         assert.are.equal('after-reinit', result.content[1].text)
-        assert.are.equal('initialize', calls[5].method)
-        assert.are.equal('tools/call', calls[7].method)
+        assert.are.equal('initialize', calls[8].method)
+        assert.are.equal('tools/call', calls[10].method)
     end)
 
     it('removes stale external tools when refreshing the same server fails', function()
@@ -422,6 +700,85 @@ describe('mcp discovery and approvals', function()
         vim.fn.delete(root, 'rf')
     end)
 
+    it('activates stdio commands relative to their configured cwd', function()
+        local root = vim.fn.tempname()
+        vim.fn.mkdir(root, 'p')
+        local server_path = write_stdio_echo_server(root)
+        local launcher_path = vim.fs.joinpath(root, 'stdio-server')
+        write_stdio_launcher(launcher_path, server_path)
+
+        local plugin = require('ministry')
+        plugin.setup({
+            auto_start = false,
+            external = {
+                request_timeout_ms = 5000,
+            },
+        })
+        plugin.set_approval('local', '__activate', 'allow')
+
+        local runtimes, errors = require('ministry.external.manager').refresh({
+            specs = {
+                {
+                    name = 'local',
+                    transport = 'stdio',
+                    command = './stdio-server',
+                    cwd = root,
+                    source = { kind = 'config', name = 'mcpServers', path = server_path },
+                },
+            },
+        })
+
+        assert.are.equal(0, #errors)
+        assert.are.equal('ready', runtimes[1].state)
+
+        local result, err = plugin.call_tool('local/echo', { message = 'cwd-relative' }, {})
+        assert.is_nil(err)
+        assert.are.equal('cwd-relative', result.content[1].text)
+
+        vim.fn.delete(root, 'rf')
+    end)
+
+    it('activates stdio commands through the configured PATH environment', function()
+        local root = vim.fn.tempname()
+        local bin = vim.fs.joinpath(root, 'bin')
+        vim.fn.mkdir(bin, 'p')
+        local server_path = write_stdio_echo_server(root)
+        local launcher_path = vim.fs.joinpath(bin, 'stdio-server')
+        write_stdio_launcher(launcher_path, server_path)
+
+        local plugin = require('ministry')
+        plugin.setup({
+            auto_start = false,
+            external = {
+                request_timeout_ms = 5000,
+            },
+        })
+        plugin.set_approval('local', '__activate', 'allow')
+
+        local runtimes, errors = require('ministry.external.manager').refresh({
+            specs = {
+                {
+                    name = 'local',
+                    transport = 'stdio',
+                    command = 'stdio-server',
+                    env = {
+                        PATH = bin .. ':' .. (vim.env.PATH or ''),
+                    },
+                    source = { kind = 'config', name = 'mcpServers', path = server_path },
+                },
+            },
+        })
+
+        assert.are.equal(0, #errors)
+        assert.are.equal('ready', runtimes[1].state)
+
+        local result, err = plugin.call_tool('local/echo', { message = 'env-path' }, {})
+        assert.is_nil(err)
+        assert.are.equal('env-path', result.content[1].text)
+
+        vim.fn.delete(root, 'rf')
+    end)
+
     it('stops a running stdio server when activation is revoked or config disappears', function()
         local root = vim.fn.tempname()
         vim.fn.mkdir(root, 'p')
@@ -521,10 +878,36 @@ describe('mcp discovery and approvals', function()
 
         local rendered =
             table.concat(require('ministry.ui.servers').render_lines(require('ministry').list_server_statuses()), '\n')
-        assert.is_true(rendered:find('error=', 1, true) ~= nil)
+        assert.is_true(rendered:find('Error', 1, true) ~= nil)
         assert.is_true(rendered:find('bootstrap failed: missing token', 1, true) ~= nil)
 
         vim.fn.delete(root, 'rf')
+    end)
+
+    it('surfaces missing stdio commands before activation spawn attempts', function()
+        local plugin = require('ministry')
+        plugin.setup({ auto_start = false })
+        plugin.set_approval('missing', '__activate', 'allow')
+
+        local runtimes, errors = require('ministry.external.manager').refresh({
+            specs = {
+                {
+                    name = 'missing',
+                    transport = 'stdio',
+                    command = 'ministry-missing-mcp-server-command',
+                    source = { kind = 'config', name = 'mcpServers', path = '/tmp/servers.json' },
+                },
+            },
+        })
+
+        assert.are.equal(1, #errors)
+        assert.are.equal('error', runtimes[1].state)
+        assert.is_true(errors[1].message:find('command is not executable', 1, true) ~= nil)
+        assert.is_true(errors[1].message:find('ministry-missing-mcp-server-command', 1, true) ~= nil)
+
+        local rendered =
+            table.concat(require('ministry.ui.servers').render_lines(require('ministry').list_server_statuses()), '\n')
+        assert.is_true(rendered:find('command is not executable', 1, true) ~= nil)
     end)
 
     it('discovers external servers during setup without activating stdio commands', function()
@@ -695,24 +1078,85 @@ describe('mcp discovery and approvals', function()
                     },
                 },
                 tools = {
-                    { name = 'echo' },
-                    { name = 'inspect' },
+                    { name = 'echo', description = 'echo input' },
+                    { name = 'inspect', description = 'inspect state' },
+                    { name = 'project/list', description = 'list projects' },
+                },
+                resources = {
+                    { uri = 'file://one', description = 'single file' },
+                    { uri = 'workspace/summary', description = 'workspace summary' },
+                },
+                resource_templates = {
+                    { uri_template = 'file://{path}', name = 'file', description = 'file by path' },
+                },
+                prompts = {
+                    { name = 'review/current', description = 'review current context' },
+                },
+                namespaces = {
+                    tools = {
+                        project = 'Project management tools',
+                    },
+                    resources = {
+                        file = 'File resources',
+                        workspace = 'Workspace resources',
+                    },
+                    prompts = {
+                        review = 'Review prompts',
+                    },
                 },
             },
         }
 
-        local lines = ui.render_lines(statuses)
+        local view = ui.render_view(statuses)
+        local lines = view.lines
         local text = table.concat(lines, '\n')
 
-        assert.is_true(text:find('method=__activate  policy=allow', 1, true) ~= nil)
-        assert.is_true(text:find('method=echo  policy=reject', 1, true) ~= nil)
-        assert.is_true(text:find('method=inspect  policy=ask inherited', 1, true) ~= nil)
-        assert.is_true(text:find('method=policy_only  policy=allow', 1, true) ~= nil)
-        assert.are.same({ server = 'local' }, ui._target_at_line(statuses, 5))
-        assert.are.same({ server = 'local', method = '__activate' }, ui._target_at_line(statuses, 7))
-        assert.are.same({ server = 'local', method = 'echo' }, ui._target_at_line(statuses, 8))
-        assert.are.same({ server = 'local', method = 'inspect' }, ui._target_at_line(statuses, 9))
-        assert.are.same({ server = 'local', method = 'policy_only' }, ui._target_at_line(statuses, 10))
+        assert.matches('__activate%s+allow', text)
+        assert.matches('echo%s+reject', text)
+        assert.matches('inspect%s+ask inherited', text)
+        assert.matches('policy_only%s+allow', text)
+        assert.matches('Resources%s+%s+resource', text)
+        assert.matches('Resource templates%s+%s+template', text)
+        assert.matches('Prompts%s+%s+prompt', text)
+        assert.is_true(text:find('Project management tools', 1, true) ~= nil)
+        assert.is_true(text:find('File resources', 1, true) ~= nil)
+        assert.is_true(text:find('Review prompts', 1, true) ~= nil)
+        assert.matches('project%s+namespace%s+Project management tools', text)
+        assert.matches('file%s+%s+namespace%s+File resources', text)
+        assert.matches('{path}%s+parameter%s+file by path', text)
+        assert.is_nil(text:find('▾%s+resource%s+1 resource namespace'))
+        local policy_span_groups = {}
+        for _, span in ipairs(view.spans) do
+            policy_span_groups[span.group] = true
+        end
+        assert.is_true(policy_span_groups.MinistryServersAllow)
+        assert.is_true(policy_span_groups.MinistryServersReject)
+        assert.is_true(policy_span_groups.MinistryServersAsk)
+
+        local server_row
+        local method_rows = {}
+        for row = 1, #lines do
+            local target = ui._target_at_line(statuses, row)
+            if target ~= nil then
+                if target.method == nil and target.methods == nil then
+                    server_row = row
+                elseif target.method ~= nil then
+                    method_rows[target.method] = row
+                end
+            end
+        end
+
+        assert.are.same({ server = 'local' }, ui._target_at_line(statuses, server_row))
+        assert.are.same(
+            { server = 'local', method = '__activate' },
+            ui._target_at_line(statuses, method_rows.__activate)
+        )
+        assert.are.same({ server = 'local', method = 'echo' }, ui._target_at_line(statuses, method_rows.echo))
+        assert.are.same({ server = 'local', method = 'inspect' }, ui._target_at_line(statuses, method_rows.inspect))
+        assert.are.same(
+            { server = 'local', method = 'policy_only' },
+            ui._target_at_line(statuses, method_rows.policy_only)
+        )
     end)
 
     it('updates method approvals from the inspection UI keymaps', function()
@@ -736,10 +1180,41 @@ describe('mcp discovery and approvals', function()
         })
         plugin.set_approval('local', 'echo', 'reject')
 
-        require('ministry.ui.servers').open(plugin.list_server_statuses())
-        vim.api.nvim_win_set_cursor(0, { 8, 0 })
-        vim.api.nvim_feedkeys('a', 'x', false)
+        local ui = require('ministry.ui.servers')
+        local statuses = plugin.list_server_statuses()
+        ui.open(statuses)
+
+        assert.are.equal('editor', vim.api.nvim_win_get_config(0).relative)
+        assert.are.equal('', vim.wo[0].statuscolumn)
+        assert.are.equal('0', vim.wo[0].foldcolumn)
+        assert.matches('MinistryServersFoldText', vim.wo[0].foldtext)
+        assert.matches('Folded:NormalFloat', vim.wo[0].winhl)
+        assert.matches('fold: ', vim.wo[0].fillchars)
+
+        local server_row
+        for row = 1, #ui.render_lines(statuses) do
+            local target = ui._target_at_line(statuses, row)
+            if target ~= nil and target.server == 'local' and target.method == nil then
+                server_row = row
+                break
+            end
+        end
+        assert.are.equal(server_row, vim.fn.foldclosed(server_row))
+        vim.cmd('normal! zR')
+
+        local echo_row
+        for row = 1, #ui.render_lines(statuses) do
+            local target = ui._target_at_line(statuses, row)
+            if target ~= nil and target.server == 'local' and target.method == 'echo' then
+                echo_row = row
+                break
+            end
+        end
+
+        vim.api.nvim_win_set_cursor(0, { echo_row, 0 })
+        vim.api.nvim_feedkeys('ga', 'x', false)
 
         assert.are.equal('allow', plugin.get_approval('local', 'echo'))
+        assert.are.equal(-1, vim.fn.foldclosed(server_row))
     end)
 end)

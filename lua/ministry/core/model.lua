@@ -37,6 +37,12 @@
 ---@field arguments? table[]
 ---@field handler fun(arguments: table|nil, ctx: table): table|nil, table|nil
 
+---@class ministry.NamespaceDescriptions
+---@field tools? table<string, string>
+---@field resources? table<string, string>
+---@field resource_templates? table<string, string>
+---@field prompts? table<string, string>
+
 ---@class ministry.ServerSpec
 ---@field name string
 ---@field title? string
@@ -45,6 +51,7 @@
 ---@field resources? ministry.ResourceSpec[]
 ---@field resource_templates? ministry.ResourceTemplateSpec[]
 ---@field prompts? ministry.PromptSpec[]
+---@field namespaces? ministry.NamespaceDescriptions
 ---@field ministry_source? ministry.ServerSource
 
 ---@alias ministry.ServerSourceKind 'native'|'config'
@@ -108,6 +115,10 @@
 ---@field error? string
 ---@field policy table
 ---@field tools? { name: string, description?: string }[]
+---@field resources? { uri: string, name?: string, description?: string }[]
+---@field resource_templates? { uri_template: string, name?: string, description?: string }[]
+---@field prompts? { name: string, description?: string }[]
+---@field namespaces? ministry.NamespaceDescriptions
 
 ---@class ministry.Config
 ---@field socket_prefix string

@@ -12,6 +12,17 @@ function M.server_spec()
         tools = tools.specs(),
         resources = resources.specs(),
         resource_templates = resources.templates(),
+        namespaces = {
+            resources = {
+                dap = 'Debugger session state backed by dap.nvim.',
+            },
+            resource_templates = {
+                dap = 'Parameterized debugger resources backed by dap.nvim.',
+                ['dap/scopes'] = 'Debugger scopes for a concrete stack frame.',
+                ['dap/stack'] = 'Debugger stack frames for a concrete thread.',
+                ['dap/variables'] = 'Debugger variables for a concrete variablesReference.',
+            },
+        },
     }
 end
 

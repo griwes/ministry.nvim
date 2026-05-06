@@ -13,6 +13,10 @@ local M = {}
 ---@field error? string
 ---@field initialized boolean
 ---@field tools table[]
+---@field resources table[]
+---@field resource_templates table[]
+---@field prompts table[]
+---@field namespaces? ministry.NamespaceDescriptions
 ---@field session_id? string
 
 ---@type table<string, ministry.ExternalRuntime>
@@ -31,6 +35,9 @@ local function ensure_runtime(spec)
             state = 'configured',
             initialized = false,
             tools = {},
+            resources = {},
+            resource_templates = {},
+            prompts = {},
         }
         runtimes[spec.name] = runtime
     else
@@ -175,6 +182,35 @@ local function approve_activation(runtime)
     }, { ignore_enabled = true })
 end
 
+---@param response table?
+---@return boolean
+local function method_not_found(response)
+    return type(response) == 'table'
+        and (response.code == -32601 or (type(response.error) == 'table' and response.error.code == -32601))
+end
+
+---@param runtime ministry.ExternalRuntime
+---@param method string
+---@param result_key string
+---@return table[], table?
+local function list_optional(runtime, method, result_key)
+    local response, err = request(runtime, method, {})
+    if err ~= nil then
+        if method_not_found(err) then
+            return {}, nil
+        end
+        return {}, err
+    end
+    if method_not_found(response) then
+        return {}, nil
+    end
+    if response.error ~= nil then
+        return {}, response.error
+    end
+
+    return type(response.result) == 'table' and response.result[result_key] or {}, nil
+end
+
 ---@param tool table
 ---@return ministry.ToolSpec
 local function proxy_tool(runtime, tool)
@@ -202,12 +238,124 @@ local function proxy_tool(runtime, tool)
     }
 end
 
+---@param resource table
+---@return ministry.ResourceSpec?
+local function proxy_resource(runtime, resource)
+    local uri = resource.uri
+    if type(uri) ~= 'string' or uri == '' then
+        return nil
+    end
+
+    return {
+        uri = uri,
+        name = resource.name,
+        description = resource.description,
+        mime_type = resource.mimeType or resource.mime_type,
+        ministry_source = runtime.spec.source,
+        handler = function()
+            local response, err = request(runtime, 'resources/read', { uri = uri })
+            if err ~= nil then
+                return nil, err
+            end
+            if response.error ~= nil then
+                return nil, response.error
+            end
+            return response.result or {}, nil
+        end,
+    }
+end
+
+---@param resource_template table
+---@return ministry.ResourceTemplateSpec?
+local function proxy_resource_template(runtime, resource_template)
+    local uri_template = resource_template.uriTemplate or resource_template.uri_template
+    if type(uri_template) ~= 'string' or uri_template == '' then
+        return nil
+    end
+
+    return {
+        name = resource_template.name or uri_template,
+        uri_template = uri_template,
+        description = resource_template.description,
+        mime_type = resource_template.mimeType or resource_template.mime_type,
+        ministry_source = runtime.spec.source,
+        handler = function(arguments)
+            arguments = arguments or {}
+            local uri = arguments.uri or arguments.namespaced_uri or ''
+            local prefix = runtime.spec.name .. '/'
+            if vim.startswith(uri, prefix) then
+                uri = uri:sub(#prefix + 1)
+            end
+
+            local response, err = request(runtime, 'resources/read', { uri = uri })
+            if err ~= nil then
+                return nil, err
+            end
+            if response.error ~= nil then
+                return nil, response.error
+            end
+            return response.result or {}, nil
+        end,
+    }
+end
+
+---@param prompt table
+---@return ministry.PromptSpec?
+local function proxy_prompt(runtime, prompt)
+    local name = prompt.name
+    if type(name) ~= 'string' or name == '' then
+        return nil
+    end
+
+    return {
+        name = name,
+        description = prompt.description,
+        arguments = prompt.arguments,
+        ministry_source = runtime.spec.source,
+        handler = function(arguments)
+            arguments = arguments or {}
+            local response, err = request(runtime, 'prompts/get', {
+                name = name,
+                arguments = arguments.arguments or arguments,
+            })
+            if err ~= nil then
+                return nil, err
+            end
+            if response.error ~= nil then
+                return nil, response.error
+            end
+            return response.result or {}, nil
+        end,
+    }
+end
+
 ---@param runtime ministry.ExternalRuntime
 local function register_runtime(runtime)
     local tools = {}
     for _, tool in ipairs(runtime.tools) do
         if type(tool) == 'table' and type(tool.name) == 'string' and tool.name ~= '' then
             table.insert(tools, proxy_tool(runtime, tool))
+        end
+    end
+    local resources = {}
+    for _, resource in ipairs(runtime.resources) do
+        local proxied = proxy_resource(runtime, resource)
+        if proxied ~= nil then
+            table.insert(resources, proxied)
+        end
+    end
+    local resource_templates = {}
+    for _, resource_template in ipairs(runtime.resource_templates) do
+        local proxied = proxy_resource_template(runtime, resource_template)
+        if proxied ~= nil then
+            table.insert(resource_templates, proxied)
+        end
+    end
+    local prompts = {}
+    for _, prompt in ipairs(runtime.prompts) do
+        local proxied = proxy_prompt(runtime, prompt)
+        if proxied ~= nil then
+            table.insert(prompts, proxied)
         end
     end
 
@@ -220,6 +368,10 @@ local function register_runtime(runtime)
         ),
         ministry_source = runtime.spec.source,
         tools = tools,
+        resources = resources,
+        resource_templates = resource_templates,
+        prompts = prompts,
+        namespaces = runtime.namespaces,
     })
 end
 
@@ -230,6 +382,9 @@ function M.refresh_server(spec)
     runtime.state = 'connecting'
     runtime.error = nil
     runtime.tools = {}
+    runtime.resources = {}
+    runtime.resource_templates = {}
+    runtime.prompts = {}
     runtime.session_id = nil
     unregister_external_server(spec.name)
 
@@ -257,6 +412,27 @@ function M.refresh_server(spec)
     end
 
     runtime.tools = type(response.result) == 'table' and response.result.tools or {}
+
+    local resources, resource_err = list_optional(runtime, 'resources/list', 'resources')
+    if resource_err ~= nil then
+        fail_runtime(runtime, resource_err.message or tostring(resource_err))
+        return false, resource_err
+    end
+    local resource_templates, resource_template_err =
+        list_optional(runtime, 'resources/templates/list', 'resourceTemplates')
+    if resource_template_err ~= nil then
+        fail_runtime(runtime, resource_template_err.message or tostring(resource_template_err))
+        return false, resource_template_err
+    end
+    local prompts, prompt_err = list_optional(runtime, 'prompts/list', 'prompts')
+    if prompt_err ~= nil then
+        fail_runtime(runtime, prompt_err.message or tostring(prompt_err))
+        return false, prompt_err
+    end
+
+    runtime.resources = resources
+    runtime.resource_templates = resource_templates
+    runtime.prompts = prompts
     runtime.state = 'ready'
     register_runtime(runtime)
     return true, nil

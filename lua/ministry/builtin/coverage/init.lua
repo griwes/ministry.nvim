@@ -9,6 +9,11 @@ function M.server_spec()
         title = 'Coverage',
         description = 'Built-in coverage observation surfaces.',
         resources = resources.specs(),
+        namespaces = {
+            resources = {
+                coverage = 'Coverage plugin state for the current session.',
+            },
+        },
     }
 end
 

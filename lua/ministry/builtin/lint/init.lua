@@ -9,6 +9,11 @@ function M.server_spec()
         title = 'Lint',
         description = 'Built-in linter configuration observation surfaces.',
         resources = resources.specs(),
+        namespaces = {
+            resources = {
+                lint = 'Linter configuration and running linter state.',
+            },
+        },
     }
 end
 

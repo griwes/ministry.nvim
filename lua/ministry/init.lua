@@ -47,6 +47,35 @@ end
 local function builtin_neovim_server_spec()
     local editor_server = builtin_editor.server_spec()
     local applied = config.get()
+    local namespaces = {
+        tools = {
+            dap = 'Debugger controls backed by dap.nvim.',
+            editor = 'Editor buffer, file, diff, and prompt tools.',
+            git = 'Stratum-backed Git repository observation tools.',
+            lsp = 'Neovim LSP diagnostics, symbols, actions, and location tools.',
+        },
+        resources = {
+            buffers = 'Current Neovim buffer inventory.',
+            coverage = 'Coverage plugin state for the current session.',
+            dap = 'Debugger session state backed by dap.nvim.',
+            formatting = 'Formatter configuration for the current buffer filetype.',
+            git = 'Stratum-backed Git repository, ref, and changed-path state.',
+            lint = 'Linter configuration and running linter state.',
+            ['location-list'] = 'Current-window location-list state.',
+            lsp = 'Active Neovim LSP clients and current-buffer LSP state.',
+            mason = 'Installed Mason package inventory.',
+            navigation = 'Builtin Neovim mark and navigation anchors.',
+            quickfix = 'Current quickfix list state.',
+            tasks = 'Generic Overseer task state.',
+            workspace = 'Editor and workspace summary for the current Neovim session.',
+        },
+        resource_templates = {
+            dap = 'Parameterized debugger resources backed by dap.nvim.',
+            ['dap/scopes'] = 'Debugger scopes for a concrete stack frame.',
+            ['dap/stack'] = 'Debugger stack frames for a concrete thread.',
+            ['dap/variables'] = 'Debugger variables for a concrete variablesReference.',
+        },
+    }
     local tools = {
         dap = builtin_dap.tools_tree(),
         editor = builtin_editor.tools_tree(),
@@ -72,6 +101,8 @@ local function builtin_neovim_server_spec()
 
     if applied.enable_terminal_tools then
         tools.terminal = builtin_terminal.tools_tree()
+        namespaces.tools.terminal = 'Ministry-owned terminal runtime tools.'
+        namespaces.resources.terminals = 'Ministry-owned terminal runtime summaries.'
         resources = merge_named_specs(builtin_terminal.resources_specs(), resources, 'uri')
     end
 
@@ -83,6 +114,7 @@ local function builtin_neovim_server_spec()
         resources = resources,
         resource_templates = resource_templates,
         prompts = editor_server.prompts,
+        namespaces = namespaces,
     }
 end
 
@@ -130,6 +162,23 @@ function merge_named_specs(existing_items, builtin_items, key)
     return merged
 end
 
+---@param existing ministry.NamespaceDescriptions?
+---@param builtin ministry.NamespaceDescriptions?
+---@return ministry.NamespaceDescriptions?
+local function merge_namespaces(existing, builtin)
+    if existing == nil and builtin == nil then
+        return nil
+    end
+
+    local merged = vim.deepcopy(builtin or {})
+    for _, group in ipairs({ 'tools', 'resources', 'resource_templates', 'prompts' }) do
+        if existing ~= nil and existing[group] ~= nil then
+            merged[group] = vim.tbl_extend('force', merged[group] or {}, existing[group])
+        end
+    end
+    return merged
+end
+
 local function snapshot_neovim_overrides(existing)
     if existing == nil then
         return nil
@@ -143,6 +192,7 @@ local function snapshot_neovim_overrides(existing)
         resources = existing.resources,
         resource_templates = existing.resource_templates,
         prompts = existing.prompts,
+        namespaces = existing.namespaces,
     }
 end
 
@@ -164,6 +214,21 @@ end
 
 local function has_any_items(items)
     return items ~= nil and #items > 0
+end
+
+---@param namespaces ministry.NamespaceDescriptions?
+---@return boolean
+local function has_namespace_descriptions(namespaces)
+    if namespaces == nil then
+        return false
+    end
+
+    for _, group in ipairs({ 'tools', 'resources', 'resource_templates', 'prompts' }) do
+        if namespaces[group] ~= nil and next(namespaces[group]) ~= nil then
+            return true
+        end
+    end
+    return false
 end
 
 local function explicit_custom_neovim(existing)
@@ -188,6 +253,7 @@ local function explicit_custom_neovim(existing)
         or has_any_items(existing.resources)
         or has_any_items(existing.resource_templates)
         or has_any_items(existing.prompts)
+        or has_namespace_descriptions(existing.namespaces)
         or existing.title ~= nil
         or existing.description ~= nil
 end
@@ -269,6 +335,7 @@ local function snapshot_user_neovim_overrides(existing)
             'uri_template'
         ),
         prompts = strip_builtin_named_overrides(existing.prompts, builtin.prompts, 'name'),
+        namespaces = existing.namespaces,
     }
 end
 
@@ -320,6 +387,7 @@ local function register_builtin_neovim_server(existing)
             'uri_template'
         ),
         prompts = merge_named_specs(overrides.prompts, builtin.prompts, 'name'),
+        namespaces = merge_namespaces(overrides.namespaces, builtin.namespaces),
     })
 end
 
@@ -439,6 +507,10 @@ function M.list_server_statuses()
             error = runtime.error,
             policy = approval.summary(runtime.spec.name),
             tools = runtime.tools,
+            resources = runtime.resources,
+            resource_templates = runtime.resource_templates,
+            prompts = runtime.prompts,
+            namespaces = runtime.namespaces,
         })
     end
 
@@ -456,6 +528,10 @@ function M.list_server_statuses()
                 state = 'ready',
                 policy = approval.summary(server_spec.name),
                 tools = server_spec.tools,
+                resources = server_spec.resources,
+                resource_templates = server_spec.resource_templates,
+                prompts = server_spec.prompts,
+                namespaces = server_spec.namespaces,
             })
         end
     end

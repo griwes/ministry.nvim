@@ -9,6 +9,11 @@ function M.server_spec()
         title = 'Mason',
         description = 'Built-in Mason inventory observation surfaces.',
         resources = resources.specs(),
+        namespaces = {
+            resources = {
+                mason = 'Installed Mason package inventory.',
+            },
+        },
     }
 end
 

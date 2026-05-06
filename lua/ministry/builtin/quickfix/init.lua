@@ -9,6 +9,12 @@ function M.server_spec()
         title = 'Quickfix',
         description = 'Built-in Neovim quickfix and location-list observation surfaces.',
         resources = resources.specs(),
+        namespaces = {
+            resources = {
+                ['location-list'] = 'Current-window location-list state.',
+                quickfix = 'Current quickfix list state.',
+            },
+        },
     }
 end
 

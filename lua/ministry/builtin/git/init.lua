@@ -11,6 +11,11 @@ function M.server_spec()
         description = 'Built-in Git repository observation surfaces backed by stratum.nvim.',
         tools = tools.specs(),
         resources = resources.specs(),
+        namespaces = {
+            resources = {
+                git = 'Stratum-backed Git repository, ref, and changed-path state.',
+            },
+        },
     }
 end
 

@@ -15,6 +15,82 @@ local clients = {}
 local handle_line
 local max_stderr_summary = 400
 
+---@param command string
+---@return boolean
+local function has_path_separator(command)
+    return command:find('/', 1, true) ~= nil or command:find('\\', 1, true) ~= nil
+end
+
+---@param command string
+---@return boolean
+local function is_absolute(command)
+    return command:sub(1, 1) == '/' or command:match('^%a:[/\\]') ~= nil
+end
+
+---@param path string
+---@return boolean
+local function is_executable(path)
+    return vim.fn.executable(path) == 1
+end
+
+---@param command string
+---@param cwd? string
+---@return string?
+local function resolve_path_command(command, cwd)
+    if is_absolute(command) then
+        return is_executable(command) and command or nil
+    end
+
+    local base = type(cwd) == 'string' and cwd ~= '' and cwd or vim.fn.getcwd()
+    local path = vim.fs.joinpath(base, command)
+    return is_executable(path) and path or nil
+end
+
+---@param command string
+---@param env? table<string, string>
+---@return string?
+local function resolve_path_search_command(command, env)
+    if is_executable(command) then
+        return command
+    end
+
+    local path = type(env) == 'table' and env.PATH or nil
+    path = type(path) == 'string' and path or vim.env.PATH
+
+    for entry in string.gmatch(path or '', '([^:]+)') do
+        local candidate = vim.fs.joinpath(entry, command)
+        if is_executable(candidate) then
+            return candidate
+        end
+    end
+
+    return nil
+end
+
+---@param spec ministry.ExternalServerSpec
+---@return string?, table?
+local function resolve_command(spec)
+    if spec.command == nil or spec.command == '' then
+        return nil, {
+            code = -32602,
+            message = 'stdio MCP server is missing command',
+        }
+    end
+
+    local command = has_path_separator(spec.command) and resolve_path_command(spec.command, spec.cwd)
+        or resolve_path_search_command(spec.command, spec.env)
+
+    if command == nil then
+        return nil,
+            {
+                code = -32000,
+                message = string.format('stdio MCP server %s command is not executable: %s', spec.name, spec.command),
+            }
+    end
+
+    return command, nil
+end
+
 ---@param data string[]|nil
 ---@return string[]
 local function compact_data(data)
@@ -85,14 +161,12 @@ function M.start(spec)
         return existing, nil
     end
 
-    if spec.command == nil or spec.command == '' then
-        return nil, {
-            code = -32602,
-            message = 'stdio MCP server is missing command',
-        }
+    local executable, err = resolve_command(spec)
+    if err ~= nil then
+        return nil, err
     end
 
-    local command = { spec.command }
+    local command = { executable }
     vim.list_extend(command, spec.args or {})
 
     local client = {

@@ -105,11 +105,14 @@ it or `approval.persistence = false`.
 
 Useful commands:
 
-- `:MinistryServers` opens the server inspection buffer.
+- `:MinistryServers` opens the floating server inspection tree.
 - `:MinistryApprove <server> [method]` allows a server or method.
 - `:MinistryReject <server> [method]` rejects a server or method.
 - `:MinistryAsk <server> [method]` resets a server or method to ask.
 
-The inspection buffer shows native and external servers with source, command or
-URL, state, and approval summaries. Server-level policies can also be toggled
-from that buffer with `a`, `r`, and `k`.
+The inspection tree shows native and external servers with source, command or
+URL, state, tools, resources, resource templates, prompts, namespace subtree
+descriptions, and approval summaries. It opens folded by default; use normal
+`zo`/`zc` folding commands to inspect subtrees. Policies can be toggled from
+server, tool, or tool-subtree lines with `ga` (allow), `gr` (reject), and `gk`
+(ask).

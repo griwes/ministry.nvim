@@ -13,6 +13,12 @@ function M.server_spec()
         tools = tools.specs(),
         resources = resources.specs(),
         prompts = prompts.specs(),
+        namespaces = {
+            resources = {
+                buffers = 'Current Neovim buffer inventory.',
+                workspace = 'Editor and workspace summary for the current Neovim session.',
+            },
+        },
     }
 end
 
