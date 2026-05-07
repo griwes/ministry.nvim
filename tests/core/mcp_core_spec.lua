@@ -650,13 +650,11 @@ describe('mcp', function()
         local payload = vim.json.decode(read.result.contents[1].text)
 
         assert.are.equal(vim.fn.getcwd(), payload.cwd)
-        assert.are.equal(vim.api.nvim_get_current_buf(), payload.current_buffer.bufnr)
-        assert.are.equal('lua', payload.current_buffer.filetype)
         assert.are.equal(1, payload.tabpages)
         assert.is_true(payload.windows >= 1)
         assert.is_true(payload.buffer_counts.valid >= 1)
         assert.is_true(payload.buffer_counts.listed >= 1)
-        assert.is_nil(payload.current_buffer.lines)
+        assert.is_nil(payload.current_buffer)
     end)
 
     it('reads the built-in terminal summary resource without embedding output', function()
@@ -876,6 +874,7 @@ describe('mcp', function()
         local payload = vim.json.decode(read.result.contents[1].text)
 
         assert.are.equal(vim.fs.normalize(global_dir), vim.fs.normalize(payload.cwd))
+        assert.is_nil(payload.current_buffer)
     end)
 
     it('normalizes scalar resource and prompt handler results', function()
@@ -1575,10 +1574,18 @@ describe('mcp', function()
 
         local shell_script =
             string.format("cat <<'EOF' | socat - ABSTRACT-CONNECT:%s\n%s\nEOF", endpoint.socket_name, payload)
-        local result = vim.system({ 'sh', '-lc', shell_script }, {
+        local result
+        vim.system({ 'sh', '-lc', shell_script }, {
             text = true,
-        }):wait()
+        }, function(completed)
+            result = completed
+        end)
 
+        assert.is_true(vim.wait(1000, function()
+            return result ~= nil
+        end))
+
+        assert.is_not_nil(result)
         assert.are.equal(0, result.code)
         local response_line =
             vim.trim((result.stdout or ''):match('(%b{})') or (result.stderr or ''):match('(%b{})') or '')

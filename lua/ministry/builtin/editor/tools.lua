@@ -30,6 +30,18 @@ local function require_string(arguments, name)
     return arguments[name], nil
 end
 
+local function require_hunks(arguments)
+    if type(arguments) ~= 'table' or type(arguments.hunks) ~= 'table' or vim.islist(arguments.hunks) == false then
+        return nil,
+            {
+                code = -32602,
+                message = 'Invalid arguments: hunks must be a list',
+            }
+    end
+
+    return arguments.hunks, nil
+end
+
 ---@return ministry.ToolSpec[]
 function M.specs()
     return {
@@ -77,6 +89,41 @@ function M.specs()
                     filetype = ctx.filetype,
                     modified = ctx.modified,
                     content = table.concat(ctx.lines, '\n'),
+                }
+            end,
+        },
+        {
+            name = 'open_buffer',
+            description = 'Open or load a file path into a Neovim buffer without changing the active window.',
+            input_schema = {
+                type = 'object',
+                properties = {
+                    path = {
+                        type = 'string',
+                    },
+                },
+                required = { 'path' },
+            },
+            handler = function(arguments)
+                local path, err = require_string(arguments, 'path')
+
+                if err ~= nil then
+                    return nil, err
+                end
+
+                local ctx, ctx_err = context.open_path(path)
+
+                if ctx_err ~= nil then
+                    return nil, ctx_err
+                end
+
+                return {
+                    bufnr = ctx.bufnr,
+                    path = ctx.name,
+                    filetype = ctx.filetype,
+                    modified = ctx.modified,
+                    listed = ctx.listed,
+                    loaded = ctx.loaded,
                 }
             end,
         },
@@ -144,18 +191,38 @@ function M.specs()
         },
         {
             name = 'apply_diff_buffer',
-            description = 'Apply content changes to a buffer selected by buffer id through a diff-based Neovim-owned edit path.',
+            description = 'Apply explicit diff hunks to a buffer selected by buffer id through a Neovim-owned edit path.',
             input_schema = {
                 type = 'object',
                 properties = {
                     bufnr = {
                         type = 'integer',
                     },
-                    content = {
-                        type = 'string',
+                    hunks = {
+                        type = 'array',
+                        items = {
+                            type = 'object',
+                            properties = {
+                                current_start = {
+                                    type = 'integer',
+                                    minimum = 0,
+                                },
+                                current_count = {
+                                    type = 'integer',
+                                    minimum = 0,
+                                },
+                                replacement = {
+                                    type = 'array',
+                                    items = {
+                                        type = 'string',
+                                    },
+                                },
+                            },
+                            required = { 'current_start', 'current_count', 'replacement' },
+                        },
                     },
                 },
-                required = { 'bufnr', 'content' },
+                required = { 'bufnr', 'hunks' },
             },
             handler = function(arguments)
                 local bufnr, bufnr_err = require_integer(arguments, 'bufnr')
@@ -164,84 +231,18 @@ function M.specs()
                     return nil, bufnr_err
                 end
 
-                local content, err = require_string(arguments, 'content')
+                local hunks, err = require_hunks(arguments)
 
                 if err ~= nil then
                     return nil, err
                 end
 
-                return diff.apply_buffer(bufnr, content)
-            end,
-        },
-        {
-            name = 'diff_current_buffer',
-            description = 'Compute a diff between the current buffer and provided content.',
-            input_schema = {
-                type = 'object',
-                properties = {
-                    content = {
-                        type = 'string',
-                    },
-                },
-                required = { 'content' },
-            },
-            handler = function(arguments)
-                local content, err = require_string(arguments, 'content')
-
-                if err ~= nil then
-                    return nil, err
-                end
-
-                return diff.current_buffer(content)
-            end,
-        },
-        {
-            name = 'write_current_buffer',
-            description = 'Write the current buffer through Neovim-owned buffer semantics.',
-            input_schema = {
-                type = 'object',
-                properties = {
-                    content = {
-                        type = 'string',
-                    },
-                },
-                required = { 'content' },
-            },
-            handler = function(arguments)
-                local content, err = require_string(arguments, 'content')
-
-                if err ~= nil then
-                    return nil, err
-                end
-
-                return io.write_current_buffer(content)
-            end,
-        },
-        {
-            name = 'apply_diff_current_buffer',
-            description = 'Apply content changes to the current buffer through a diff-based Neovim-owned edit path.',
-            input_schema = {
-                type = 'object',
-                properties = {
-                    content = {
-                        type = 'string',
-                    },
-                },
-                required = { 'content' },
-            },
-            handler = function(arguments)
-                local content, err = require_string(arguments, 'content')
-
-                if err ~= nil then
-                    return nil, err
-                end
-
-                return diff.apply_current_buffer(content)
+                return diff.apply_buffer(bufnr, hunks)
             end,
         },
         {
             name = 'diff_file',
-            description = 'Compute a diff between a file on disk and provided content.',
+            description = 'Compute a diff between a path and provided content, using a matching modified loaded buffer as the source of truth.',
             input_schema = {
                 type = 'object',
                 properties = {
@@ -272,7 +273,7 @@ function M.specs()
         },
         {
             name = 'write_file',
-            description = 'Write a file on disk and reload any matching loaded buffer.',
+            description = 'Write content for a path, updating a matching modified loaded buffer instead of forcing a save.',
             input_schema = {
                 type = 'object',
                 properties = {
@@ -303,18 +304,38 @@ function M.specs()
         },
         {
             name = 'apply_diff_file',
-            description = 'Apply content changes to a file on disk and reload any matching loaded buffer.',
+            description = 'Apply explicit diff hunks for a path, updating the matching loaded or hidden buffer instead of forcing a save.',
             input_schema = {
                 type = 'object',
                 properties = {
                     path = {
                         type = 'string',
                     },
-                    content = {
-                        type = 'string',
+                    hunks = {
+                        type = 'array',
+                        items = {
+                            type = 'object',
+                            properties = {
+                                current_start = {
+                                    type = 'integer',
+                                    minimum = 0,
+                                },
+                                current_count = {
+                                    type = 'integer',
+                                    minimum = 0,
+                                },
+                                replacement = {
+                                    type = 'array',
+                                    items = {
+                                        type = 'string',
+                                    },
+                                },
+                            },
+                            required = { 'current_start', 'current_count', 'replacement' },
+                        },
                     },
                 },
-                required = { 'path', 'content' },
+                required = { 'path', 'hunks' },
             },
             handler = function(arguments)
                 local path, path_err = require_string(arguments, 'path')
@@ -323,13 +344,13 @@ function M.specs()
                     return nil, path_err
                 end
 
-                local content, content_err = require_string(arguments, 'content')
+                local hunks, hunk_err = require_hunks(arguments)
 
-                if content_err ~= nil then
-                    return nil, content_err
+                if hunk_err ~= nil then
+                    return nil, hunk_err
                 end
 
-                return diff.apply_file(path, content)
+                return diff.apply_file(path, hunks)
             end,
         },
     }

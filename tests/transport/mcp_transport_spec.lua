@@ -141,6 +141,103 @@ describe('mcp', function()
         vim.notify = original_notify
     end)
 
+    it('schedules socket JSON-RPC dispatch out of fast-event read callbacks', function()
+        local plugin = require('ministry')
+        local original_new_pipe = vim.uv.new_pipe
+        local original_in_fast_event = vim.in_fast_event
+        local original_schedule = vim.schedule
+        local listener_read_cb
+        local writes = {}
+        local scheduled = {}
+        local in_fast_event = true
+        local listener_pipe = {
+            bind2 = function()
+                return 0
+            end,
+            listen = function(_, _, cb)
+                listener_read_cb = cb
+                return true
+            end,
+            accept = function()
+                return true
+            end,
+            is_closing = function()
+                return false
+            end,
+            close = function() end,
+        }
+        local client_closed = false
+        local client_pipe
+        client_pipe = {
+            read_start = function(_, cb)
+                client_pipe._read_cb = cb
+                return true
+            end,
+            read_stop = function() end,
+            write = function(_, message)
+                table.insert(writes, vim.json.decode(message))
+            end,
+            is_closing = function()
+                return client_closed
+            end,
+            close = function()
+                client_closed = true
+            end,
+        }
+        local pipe_count = 0
+
+        vim.in_fast_event = function()
+            return in_fast_event
+        end
+        vim.schedule = function(cb)
+            table.insert(scheduled, cb)
+        end
+        vim.uv.new_pipe = function()
+            pipe_count = pipe_count + 1
+            if pipe_count == 1 then
+                return listener_pipe
+            end
+
+            return client_pipe
+        end
+
+        local ok, err = pcall(function()
+            plugin.setup({ auto_start = false })
+
+            assert.is_true(plugin.start())
+            listener_read_cb(nil)
+
+            client_pipe._read_cb(nil, vim.json.encode({
+                jsonrpc = '2.0',
+                id = 1,
+                method = 'resources/read',
+                params = {
+                    uri = 'neovim/buffers://list',
+                },
+            }) .. '\n')
+
+            assert.are.equal(0, #writes)
+            assert.are.equal(1, #scheduled)
+
+            in_fast_event = false
+            scheduled[1]()
+
+            assert.are.equal(1, #writes)
+            assert.is_nil(writes[1].error)
+            assert.are.equal(1, writes[1].id)
+            assert.is_true(writes[1].result.contents[1].text:find('"buffers"', 1, true) ~= nil)
+        end)
+
+        plugin.stop()
+        vim.uv.new_pipe = original_new_pipe
+        vim.in_fast_event = original_in_fast_event
+        vim.schedule = original_schedule
+
+        if not ok then
+            error(err)
+        end
+    end)
+
     it('clears buffered malformed HTTP payloads before closing the client', function()
         local http_server = require('ministry.transport.http.server')
         local sent_response
@@ -220,7 +317,11 @@ describe('mcp', function()
         assert.is_true(vim.tbl_contains(server_names, 'neovim'))
         assert.is_true(vim.tbl_contains(tool_names, 'neovim/terminal/create'))
         assert.is_false(vim.tbl_contains(tool_names, 'neovim/editor/read_current_buffer'))
+        assert.is_false(vim.tbl_contains(tool_names, 'neovim/editor/diff_current_buffer'))
+        assert.is_false(vim.tbl_contains(tool_names, 'neovim/editor/write_current_buffer'))
+        assert.is_false(vim.tbl_contains(tool_names, 'neovim/editor/apply_diff_current_buffer'))
         assert.is_true(vim.tbl_contains(tool_names, 'neovim/editor/list_buffers'))
+        assert.is_true(vim.tbl_contains(tool_names, 'neovim/editor/open_buffer'))
         assert.is_true(vim.tbl_contains(tool_names, 'neovim/lsp/list_diagnostics'))
         assert.is_true(vim.tbl_contains(tool_names, 'neovim/lsp/code_actions'))
         assert.is_true(vim.tbl_contains(tool_names, 'neovim/lsp/document_symbols'))
@@ -308,6 +409,122 @@ describe('mcp', function()
 
         assert.are.same({}, plugin.list_server_guidance())
         assert.is_nil(plugin.server_guidance('custom'))
+    end)
+
+    it('owns built-in Neovim MCP routing guidance', function()
+        local plugin = require('ministry')
+
+        plugin.setup({ enable_terminal_tools = true })
+
+        local guidance = plugin.server_guidance('neovim', {
+            agent_capabilities = {
+                mcpCapabilities = {
+                    tools = {
+                        listChanged = true,
+                    },
+                    resources = {
+                        listChanged = true,
+                    },
+                },
+            },
+        })
+
+        assert.is_true(guidance:find('MCP server `neovim` before shell', 1, true) ~= nil)
+        assert.is_true(guidance:find('Mandatory Neovim MCP routing contract', 1, true) ~= nil)
+        assert.is_true(guidance:find('Do not start editor tasks with `pwd`, `rg`', 1, true) ~= nil)
+        assert.is_true(guidance:find('generic patch/edit mechanisms are fallback paths', 1, true) ~= nil)
+        assert.is_true(guidance:find('neovim/buffers://list', 1, true) ~= nil)
+        assert.is_true(guidance:find('neovim/workspace://summary', 1, true) ~= nil)
+        assert.is_true(guidance:find('neovim/editor/list_buffers', 1, true) ~= nil)
+        assert.is_true(guidance:find('neovim/editor/open_buffer', 1, true) ~= nil)
+        assert.is_true(guidance:find('without taking over a user window', 1, true) ~= nil)
+        assert.is_true(guidance:find('open in a split', 1, true) ~= nil)
+        assert.is_true(
+            guidance:find('the first editor-targeting MCP action should be `neovim/editor/list_buffers`', 1, true)
+                ~= nil
+        )
+        assert.is_true(guidance:find('the focused buffer may be the ACP/Legate chat surface', 1, true) ~= nil)
+        assert.is_true(guidance:find('neovim/editor/diff_file', 1, true) ~= nil)
+        assert.is_true(guidance:find('neovim/terminal/wait', 1, true) ~= nil)
+        assert.is_true(guidance:find('tool path `editor/...`, `terminal/...`, `git/...`, or `dap/...`', 1, true) ~= nil)
+        assert.is_false(guidance:find('editor__list_buffers', 1, true) ~= nil)
+        assert.is_false(guidance:find('terminal__wait', 1, true) ~= nil)
+        assert.are.same({}, plugin.list_prompt_descriptors())
+    end)
+
+    it('filters built-in Neovim guidance by advertised MCP capability family', function()
+        local plugin = require('ministry')
+
+        plugin.setup({ enable_terminal_tools = true })
+
+        local resources_guidance = plugin.server_guidance('neovim', {
+            agent_capabilities = {
+                mcpCapabilities = {
+                    resources = {
+                        listChanged = true,
+                    },
+                },
+            },
+        })
+        local tools_guidance = plugin.server_guidance('neovim', {
+            agent_capabilities = {
+                mcpCapabilities = {
+                    tools = {
+                        listChanged = true,
+                    },
+                },
+            },
+        })
+
+        assert.is_true(resources_guidance:find('neovim/workspace://summary', 1, true) ~= nil)
+        assert.is_true(resources_guidance:find('neovim/git://overview', 1, true) ~= nil)
+        assert.is_false(resources_guidance:find('neovim/editor/diff_file', 1, true) ~= nil)
+        assert.is_false(resources_guidance:find('tool path `editor/...`', 1, true) ~= nil)
+
+        assert.is_true(tools_guidance:find('neovim/editor/list_buffers', 1, true) ~= nil)
+        assert.is_true(tools_guidance:find('neovim/git/overview', 1, true) ~= nil)
+        assert.is_false(tools_guidance:find('neovim/workspace://summary', 1, true) ~= nil)
+        assert.is_false(tools_guidance:find('neovim/git://overview', 1, true) ~= nil)
+    end)
+
+    it('emits built-in Neovim guidance when MCP capabilities are unknown', function()
+        local plugin = require('ministry')
+
+        plugin.setup()
+
+        local guidance = plugin.server_guidance('neovim', {
+            agent_capabilities = {
+                promptCapabilities = {
+                    image = true,
+                },
+            },
+        })
+
+        assert.is_true(guidance:find('neovim/editor/list_buffers', 1, true) ~= nil)
+        assert.is_true(guidance:find('neovim/editor/diff_file', 1, true) ~= nil)
+        assert.is_true(guidance:find('apply_diff_file` with explicit generated `hunks`', 1, true) ~= nil)
+        assert.is_true(guidance:find('only when you need Ministry to compute hunks', 1, true) ~= nil)
+        assert.is_true(guidance:find('do not pass whole-file content to apply_diff tools', 1, true) ~= nil)
+    end)
+
+    it('suppresses built-in Neovim guidance for explicit empty MCP capabilities', function()
+        local plugin = require('ministry')
+
+        plugin.setup()
+
+        assert.is_nil(plugin.server_guidance('neovim', {
+            agent_capabilities = {
+                mcpCapabilities = {},
+            },
+        }))
+        assert.are.same(
+            {},
+            plugin.list_server_guidance({
+                agent_capabilities = {
+                    mcpCapabilities = {},
+                },
+            })
+        )
     end)
 
     it('drops built-in terminal tools when setup disables them after enabling', function()
@@ -1287,6 +1504,70 @@ describe('mcp', function()
         assert.are.equal(2, #writes)
         assert.truthy(writes[1]:find('"id":1', 1, true) ~= nil)
         assert.truthy(writes[2]:find('"id":2', 1, true) ~= nil)
+    end)
+
+    it('schedules JSON-RPC dispatch out of fast-event HTTP read callbacks', function()
+        local http_server = require('ministry.transport.http.server')
+        local original_in_fast_event = vim.in_fast_event
+        local original_schedule = vim.schedule
+        local in_fast_event = true
+        local scheduled = {}
+        local writes = {}
+        local callback
+        local body = '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+        local request = table.concat({
+            'POST /mcp HTTP/1.1',
+            'Host: 127.0.0.1',
+            'Content-Type: application/json',
+            string.format('Content-Length: %d', #body),
+            '',
+            body,
+        }, '\r\n')
+        local client = {
+            read_start = function(_, cb)
+                callback = cb
+            end,
+            read_stop = function() end,
+            close = function() end,
+            is_closing = function()
+                return false
+            end,
+            write = function(_, payload, cb)
+                table.insert(writes, payload)
+                if cb ~= nil then
+                    cb()
+                end
+            end,
+        }
+
+        vim.in_fast_event = function()
+            return in_fast_event
+        end
+        vim.schedule = function(cb)
+            table.insert(scheduled, cb)
+        end
+
+        local ok, err = pcall(function()
+            http_server._start_client_read(client)
+            callback(nil, request)
+
+            assert.are.equal(0, #writes)
+            assert.are.equal(1, #scheduled)
+
+            in_fast_event = false
+            scheduled[1]()
+
+            assert.are.equal(1, #writes)
+            assert.truthy(writes[1]:find('HTTP/1.1 200 OK', 1, true) ~= nil)
+            assert.truthy(writes[1]:find('"id":1', 1, true) ~= nil)
+        end)
+
+        vim.in_fast_event = original_in_fast_event
+        vim.schedule = original_schedule
+
+        if not ok then
+            error(err)
+        end
     end)
 
     it('preserves additional pipelined requests buffered before scheduled dispatch resumes', function()

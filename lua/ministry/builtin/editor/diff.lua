@@ -54,25 +54,92 @@ end
 local function apply_hunks_to_buffer(bufnr, hunks)
     for index = #hunks, 1, -1 do
         local hunk = hunks[index]
-        vim.api.nvim_buf_set_lines(
-            bufnr,
-            hunk.current_start - 1,
-            hunk.current_start - 1 + hunk.current_count,
-            false,
-            hunk.replacement
-        )
+        local start_index = hunk.current_count == 0 and hunk.current_start or hunk.current_start - 1
+        vim.api.nvim_buf_set_lines(bufnr, start_index, start_index + hunk.current_count, false, hunk.replacement)
     end
 end
 
----@param content string
----@return table
-function M.current_buffer(content)
-    local current_lines = vim.api.nvim_buf_get_lines(0, 0, -1, false)
-    local target_lines = normalized_lines(content)
+---@param hunks any
+---@return table[]|nil, table|nil
+local function validate_hunks(hunks)
+    if type(hunks) ~= 'table' or vim.islist(hunks) == false then
+        return nil,
+            {
+                code = -32602,
+                message = 'Invalid arguments: hunks must be a list',
+            }
+    end
 
-    return {
-        hunks = diff_hunks(current_lines, target_lines),
-    }
+    local normalized = {}
+
+    for index, hunk in ipairs(hunks) do
+        if type(hunk) ~= 'table' then
+            return nil,
+                {
+                    code = -32602,
+                    message = string.format('Invalid arguments: hunks[%d] must be an object', index),
+                }
+        end
+
+        local current_start = hunk.current_start
+        local current_count = hunk.current_count
+        local replacement = hunk.replacement
+
+        if type(current_start) ~= 'number' or current_start % 1 ~= 0 or current_start < 0 then
+            return nil,
+                {
+                    code = -32602,
+                    message = string.format(
+                        'Invalid arguments: hunks[%d].current_start must be a non-negative integer',
+                        index
+                    ),
+                }
+        end
+
+        if type(current_count) ~= 'number' or current_count % 1 ~= 0 or current_count < 0 then
+            return nil,
+                {
+                    code = -32602,
+                    message = string.format(
+                        'Invalid arguments: hunks[%d].current_count must be a non-negative integer',
+                        index
+                    ),
+                }
+        end
+
+        if type(replacement) ~= 'table' or vim.islist(replacement) == false then
+            return nil,
+                {
+                    code = -32602,
+                    message = string.format(
+                        'Invalid arguments: hunks[%d].replacement must be a list of strings',
+                        index
+                    ),
+                }
+        end
+
+        for line_index, line in ipairs(replacement) do
+            if type(line) ~= 'string' then
+                return nil,
+                    {
+                        code = -32602,
+                        message = string.format(
+                            'Invalid arguments: hunks[%d].replacement[%d] must be a string',
+                            index,
+                            line_index
+                        ),
+                    }
+            end
+        end
+
+        table.insert(normalized, {
+            current_start = current_start,
+            current_count = current_count,
+            replacement = replacement,
+        })
+    end
+
+    return normalized, nil
 end
 
 ---@param bufnr integer
@@ -117,61 +184,27 @@ function M.file(path, content)
     end
 
     local normalized = io.normalize_path(path)
-    local handle, open_error = io.open_read(normalized)
+    local bufnr, ensure_err = io.ensure_buffer(normalized)
 
-    local current_content = ''
-
-    if handle == nil then
-        if io.path_exists(normalized) then
-            return nil,
-                {
-                    code = -32000,
-                    message = open_error or string.format('Failed to read file: %s', normalized),
-                }
-        end
-    else
-        current_content = handle:read('*a')
-        handle:close()
-    end
-
-    local current_lines = normalized_lines(current_content)
-    local target_lines = normalized_lines(content)
-
-    return {
-        path = normalized,
-        hunks = diff_hunks(current_lines, target_lines),
-    }, nil
-end
-
----@param content string
----@return table|nil, table|nil
-function M.apply_current_buffer(content)
-    local bufnr = vim.api.nvim_get_current_buf()
-
-    if not vim.bo[bufnr].modifiable then
-        return nil, {
-            code = -32000,
-            message = 'Current buffer is not modifiable',
-        }
+    if ensure_err ~= nil then
+        return nil, ensure_err
     end
 
     local current_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
     local target_lines = normalized_lines(content)
-    local hunks = diff_hunks(current_lines, target_lines)
-    apply_hunks_to_buffer(bufnr, hunks)
 
     return {
+        path = normalized,
         bufnr = bufnr,
-        applied_hunk_count = #hunks,
-        modified = vim.bo[bufnr].modified,
+        hunks = diff_hunks(current_lines, target_lines),
     },
         nil
 end
 
 ---@param bufnr integer
----@param content string
+---@param hunks table[]
 ---@return table|nil, table|nil
-function M.apply_buffer(bufnr, content)
+function M.apply_buffer(bufnr, hunks)
     if not vim.api.nvim_buf_is_valid(bufnr) then
         return nil,
             {
@@ -188,23 +221,26 @@ function M.apply_buffer(bufnr, content)
             }
     end
 
-    local current_lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
-    local target_lines = normalized_lines(content)
-    local hunks = diff_hunks(current_lines, target_lines)
-    apply_hunks_to_buffer(bufnr, hunks)
+    local normalized_hunks, hunk_err = validate_hunks(hunks)
+
+    if hunk_err ~= nil then
+        return nil, hunk_err
+    end
+
+    apply_hunks_to_buffer(bufnr, normalized_hunks)
 
     return {
         bufnr = bufnr,
-        applied_hunk_count = #hunks,
+        applied_hunk_count = #normalized_hunks,
         modified = vim.bo[bufnr].modified,
     },
         nil
 end
 
 ---@param path string
----@param content string
+---@param hunks table[]
 ---@return table|nil result, table|nil err, table|nil warning
-function M.apply_file(path, content)
+function M.apply_file(path, hunks)
     if type(path) ~= 'string' then
         return nil,
             {
@@ -213,45 +249,23 @@ function M.apply_file(path, content)
             }
     end
 
-    if type(content) ~= 'string' then
-        return nil,
-            {
-                code = -32602,
-                message = 'Invalid arguments: content must be a string',
-            }
-    end
-
     local normalized = io.normalize_path(path)
-    local bufnr = io.find_loaded_buffer(normalized)
+    local bufnr, ensure_err = io.ensure_buffer(normalized)
 
-    if bufnr ~= nil and vim.bo[bufnr].modified then
-        return nil,
-            {
-                code = -32000,
-                message = string.format('Buffer %d has unsaved changes', bufnr),
-            }
+    if ensure_err ~= nil then
+        return nil, ensure_err
     end
 
-    local write_error = io.write_disk(normalized, content)
+    local result, err = M.apply_buffer(bufnr, hunks)
 
-    if write_error ~= nil then
-        return nil, write_error
+    if err ~= nil then
+        return nil, err
     end
 
-    local warning = nil
-
-    if bufnr ~= nil then
-        local reload_result = io.reload_buffer(bufnr)
-
-        if reload_result ~= nil and reload_result.code ~= nil and reload_result.message ~= nil then
-            warning = reload_result
-        end
-    end
-
-    return {
-        path = normalized,
-        reloaded_buffer = bufnr ~= nil and warning == nil,
-    }, nil, warning
+    result.path = normalized
+    result.reloaded_buffer = false
+    result.updated_buffer = bufnr
+    return result, nil, nil
 end
 
 return M

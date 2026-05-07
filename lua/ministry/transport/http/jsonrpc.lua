@@ -101,4 +101,19 @@ function M.dispatch_jsonrpc_message(message)
     return response
 end
 
+---@param message any
+---@param callback fun(response: table|nil)
+function M.dispatch_jsonrpc_message_async(message, callback)
+    local function dispatch()
+        callback(M.dispatch_jsonrpc_message(message))
+    end
+
+    if vim.in_fast_event() then
+        vim.schedule(dispatch)
+        return
+    end
+
+    dispatch()
+end
+
 return M

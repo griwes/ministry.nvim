@@ -2,7 +2,7 @@ describe('mcp', function()
     before_each(function()
         require('ministry').reset()
     end)
-    it('rejects editor/write_file when the matching buffer has unsaved changes', function()
+    it('updates the matching modified buffer for editor/write_file without forcing a save', function()
         local plugin = require('ministry')
         plugin.setup()
 
@@ -25,10 +25,10 @@ describe('mcp', function()
         local disk = assert(read_handle:read('*a'))
         read_handle:close()
 
-        assert.is_nil(result)
-        assert.are.equal(-32000, err.code)
-        assert.are.equal('Buffer ' .. vim.api.nvim_get_current_buf() .. ' has unsaved changes', err.message)
-        assert.are.same({ 'before', 'draft change' }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
+        assert.is_nil(err)
+        assert.are.equal(vim.api.nvim_get_current_buf(), result.updated_buffer)
+        assert.is_false(result.reloaded_buffer)
+        assert.are.same({ 'after', 'value' }, vim.api.nvim_buf_get_lines(0, 0, -1, false))
         assert.is_true(vim.bo[0].modified)
         assert.are.equal('before\n', disk)
 
@@ -2019,39 +2019,4 @@ it('closes the tcp handle when HTTP bind fails', function()
     assert.is_false(ok)
     assert.are.equal('bind failed', err)
     assert.are.equal(1, close_calls)
-end)
-
-it('returns a warning when buffer reload fails after writing', function()
-    local io_mod = require('ministry.builtin.editor.io')
-    local tmp = vim.fn.tempname()
-    local bufnr = vim.api.nvim_create_buf(true, false)
-    local original_reload_buffer = io_mod.reload_buffer
-
-    vim.api.nvim_buf_set_name(bufnr, tmp)
-
-    io_mod.reload_buffer = function(target)
-        assert.are.equal(bufnr, target)
-        return {
-            code = -32000,
-            message = 'reload failed',
-        }
-    end
-
-    local result, err, warning = io_mod.write_file(tmp, 'hello world')
-    local disk = table.concat(vim.fn.readfile(tmp), '\n')
-
-    io_mod.reload_buffer = original_reload_buffer
-    vim.api.nvim_buf_delete(bufnr, { force = true })
-    vim.fn.delete(tmp)
-
-    assert.are.same({
-        path = tmp,
-        reloaded_buffer = false,
-    }, result)
-    assert.is_nil(err)
-    assert.are.same({
-        code = -32000,
-        message = 'reload failed',
-    }, warning)
-    assert.are.equal('hello world', disk)
 end)

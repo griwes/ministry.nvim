@@ -17,11 +17,6 @@ local function buffer_context(bufnr)
     }
 end
 
----@return table
-function M.current_buffer()
-    return buffer_context(vim.api.nvim_get_current_buf())
-end
-
 ---@param bufnr integer
 ---@return table|nil, table|nil
 function M.by_id(bufnr)
@@ -30,6 +25,32 @@ function M.by_id(bufnr)
             {
                 code = -32000,
                 message = string.format('Invalid buffer id: %s', tostring(bufnr)),
+            }
+    end
+
+    return buffer_context(bufnr), nil
+end
+
+---@param path string
+---@return table|nil, table|nil
+function M.open_path(path)
+    local normalized = vim.fs.normalize(vim.fn.fnamemodify(path, ':p'))
+    local bufnr = vim.fn.bufadd(normalized)
+
+    if bufnr == 0 then
+        return nil,
+            {
+                code = -32000,
+                message = string.format('Failed to create buffer for path: %s', normalized),
+            }
+    end
+
+    local ok, load_err = pcall(vim.fn.bufload, bufnr)
+    if not ok then
+        return nil,
+            {
+                code = -32000,
+                message = string.format('Failed to load buffer %d: %s', bufnr, tostring(load_err)),
             }
     end
 
@@ -76,18 +97,8 @@ end
 
 ---@return table
 function M.workspace_summary()
-    local current_bufnr = vim.api.nvim_get_current_buf()
-
     return {
         cwd = vim.fn.getcwd(-1, -1),
-        current_buffer = {
-            bufnr = current_bufnr,
-            name = vim.api.nvim_buf_get_name(current_bufnr),
-            filetype = vim.bo[current_bufnr].filetype,
-            modified = vim.bo[current_bufnr].modified,
-            listed = vim.fn.buflisted(current_bufnr) == 1,
-            loaded = vim.api.nvim_buf_is_loaded(current_bufnr),
-        },
         tabpages = #vim.api.nvim_list_tabpages(),
         windows = #vim.api.nvim_list_wins(),
         buffer_counts = buffer_counts(),

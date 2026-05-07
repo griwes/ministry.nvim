@@ -28,6 +28,7 @@ local defaults = {
         persistence = true,
         path = nil,
         provider = nil,
+        providers = { 'legate' },
     },
     ui = {
         width = 0.8,

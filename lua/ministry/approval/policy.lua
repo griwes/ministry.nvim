@@ -181,6 +181,74 @@ local function split_tool_name(namespaced_name)
 end
 
 ---@param request ministry.ApprovalRequest
+---@param provider fun(request: ministry.ApprovalRequest): ministry.ApprovalDecision|boolean|nil
+---@param label string
+---@return boolean|nil, table|nil, boolean
+local function check_provider(request, provider, label)
+    local ok, provider_decision = pcall(provider, vim.deepcopy(request))
+    if not ok then
+        return false,
+            {
+                code = -32001,
+                message = string.format('Ministry approval provider %s failed: %s', label, tostring(provider_decision)),
+            },
+            true
+    end
+    if provider_decision == true or provider_decision == 'allow' then
+        return true, nil, true
+    end
+    if provider_decision == false or provider_decision == 'reject' then
+        return false,
+            {
+                code = -32001,
+                message = string.format('Ministry approval rejected %s', request.namespaced_name),
+            },
+            true
+    end
+
+    return nil, nil, false
+end
+
+---@param provider_name string
+---@return (fun(request: ministry.ApprovalRequest): ministry.ApprovalDecision|boolean|nil)?
+local function load_discovered_provider(provider_name)
+    local ok, provider = pcall(require, 'ministry.approval.providers.' .. provider_name)
+    if not ok then
+        return nil
+    end
+    if type(provider) == 'function' then
+        return provider
+    end
+    if type(provider) == 'table' and type(provider.request) == 'function' then
+        return provider.request
+    end
+    return nil
+end
+
+---@param request ministry.ApprovalRequest
+---@return boolean|nil, table|nil, boolean
+local function check_discovered_providers(request)
+    local provider_names = config.get().approval.providers
+    if type(provider_names) ~= 'table' then
+        return nil, nil, false
+    end
+
+    for _, provider_name in ipairs(provider_names) do
+        if type(provider_name) == 'string' and provider_name ~= '' then
+            local provider = load_discovered_provider(provider_name)
+            if provider ~= nil then
+                local approved, err, handled = check_provider(request, provider, provider_name)
+                if handled then
+                    return approved, err, true
+                end
+            end
+        end
+    end
+
+    return nil, nil, false
+end
+
+---@param request ministry.ApprovalRequest
 ---@param opts? { ignore_enabled?: boolean }
 ---@return boolean, table|nil
 function M.check(request, opts)
@@ -206,24 +274,15 @@ function M.check(request, opts)
 
     local provider = config.get().approval.provider
     if type(provider) == 'function' then
-        local ok, provider_decision = pcall(provider, vim.deepcopy(request))
-        if not ok then
-            return false,
-                {
-                    code = -32001,
-                    message = string.format('Ministry approval provider failed: %s', tostring(provider_decision)),
-                }
+        local approved, err, handled = check_provider(request, provider, 'configured')
+        if handled then
+            return approved, err
         end
-        if provider_decision == true or provider_decision == 'allow' then
-            return true, nil
-        end
-        if provider_decision == false or provider_decision == 'reject' then
-            return false,
-                {
-                    code = -32001,
-                    message = string.format('Ministry approval rejected %s', request.namespaced_name),
-                }
-        end
+    end
+
+    local approved, err, handled = check_discovered_providers(request)
+    if handled then
+        return approved, err
     end
 
     if #vim.api.nvim_list_uis() == 0 then

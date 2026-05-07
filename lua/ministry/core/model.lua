@@ -91,6 +91,7 @@
 ---@field persistence boolean
 ---@field path? string
 ---@field provider? fun(request: ministry.ApprovalRequest): ministry.ApprovalDecision|boolean|nil
+---@field providers string[]
 
 ---@class ministry.ApprovalRequest
 ---@field server string

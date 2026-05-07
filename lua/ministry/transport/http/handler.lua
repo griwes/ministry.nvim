@@ -190,17 +190,30 @@ function M.handle_http_request(client, request, deps)
         return
     end
 
-    local response = http_jsonrpc.dispatch_jsonrpc_message(message)
-    if response == nil then
-        deps.send_response(client, 204, '', response_headers, keep_alive, http_version)
-        return
-    end
+    http_jsonrpc.dispatch_jsonrpc_message_async(message, function(response)
+        if client:is_closing() then
+            return
+        end
 
-    local encoded = vim.json.encode(response)
-    local status = vim.islist(response) and http_jsonrpc.batch_response_status(response)
-        or http_jsonrpc.http_status_for_jsonrpc_response(response)
+        if response == nil then
+            deps.send_response(client, 204, '', response_headers, keep_alive, http_version)
+            return
+        end
 
-    deps.send_json_response(client, status, encoded, keep_alive, http_version, response_content_type, response_headers)
+        local encoded = vim.json.encode(response)
+        local status = vim.islist(response) and http_jsonrpc.batch_response_status(response)
+            or http_jsonrpc.http_status_for_jsonrpc_response(response)
+
+        deps.send_json_response(
+            client,
+            status,
+            encoded,
+            keep_alive,
+            http_version,
+            response_content_type,
+            response_headers
+        )
+    end)
 end
 
 return M

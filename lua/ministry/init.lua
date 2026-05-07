@@ -8,6 +8,7 @@ local builtin_lint = require('ministry.builtin.lint.init')
 local builtin_lsp = require('ministry.builtin.lsp.init')
 local builtin_mason = require('ministry.builtin.mason.init')
 local builtin_navigation = require('ministry.builtin.navigation.init')
+local builtin_neovim_guidance = require('ministry.builtin.neovim_guidance')
 local builtin_overseer = require('ministry.builtin.overseer.init')
 local builtin_quickfix = require('ministry.builtin.quickfix.init')
 local builtin_terminal = require('ministry.builtin.terminal')
@@ -110,6 +111,7 @@ local function builtin_neovim_server_spec()
         name = 'neovim',
         title = 'Neovim',
         description = 'Built-in Neovim-local MCP capability surfaces.',
+        guidance = builtin_neovim_guidance.guidance,
         tools = tools,
         resources = resources,
         resource_templates = resource_templates,
@@ -326,7 +328,7 @@ local function snapshot_user_neovim_overrides(existing)
     return {
         title = nil,
         description = nil,
-        guidance = existing.guidance,
+        guidance = existing.guidance ~= builtin.guidance and existing.guidance or nil,
         tools = strip_builtin_tool_overrides(existing.tools, builtin.tools),
         resources = strip_builtin_named_overrides(existing.resources, builtin.resources, 'uri'),
         resource_templates = strip_builtin_named_overrides(

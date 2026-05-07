@@ -21,9 +21,11 @@ describe('mcp', function()
             content = 'after\nvalue\n',
         }, {})
 
+        vim.api.nvim_buf_set_lines(current_bufnr, 0, -1, false, { 'before' })
+        vim.bo[current_bufnr].modified = false
         local apply_result, apply_err = plugin.call_tool('neovim/editor/apply_diff_buffer', {
             bufnr = current_bufnr,
-            content = 'after\nvalue\n',
+            hunks = diff_by_id and diff_by_id.hunks or {},
         }, {})
 
         local terminal_result, terminal_err = plugin.call_tool('neovim/terminal/create', {
@@ -60,6 +62,36 @@ describe('mcp', function()
         assert.is_true(output_result.stdout:find('hello', 1, true) ~= nil)
         assert.is_nil(release_err)
         assert.is_true(release_result.released)
+    end)
+
+    it('loads unopened files into hidden buffers for buffer-id editor workflows', function()
+        local plugin = require('ministry')
+        local path = vim.fn.tempname()
+        local current_win = vim.api.nvim_get_current_win()
+        local current_buf = vim.api.nvim_get_current_buf()
+
+        plugin.setup()
+        vim.fn.writefile({ 'return 7' }, path)
+
+        local opened, open_err = plugin.call_tool('neovim/editor/open_buffer', {
+            path = path,
+        }, {})
+
+        assert.is_nil(open_err)
+        assert.are.equal(current_win, vim.api.nvim_get_current_win())
+        assert.are.equal(current_buf, vim.api.nvim_get_current_buf())
+        assert.is_true(opened.loaded)
+        assert.are.equal(vim.fs.normalize(vim.fn.fnamemodify(path, ':p')), vim.fs.normalize(opened.path))
+
+        local read, read_err = plugin.call_tool('neovim/editor/read_buffer', {
+            bufnr = opened.bufnr,
+        }, {})
+
+        assert.is_nil(read_err)
+        assert.are.equal('return 7', read.content)
+
+        vim.api.nvim_buf_delete(opened.bufnr, { force = true })
+        os.remove(path)
     end)
 
     it('returns structured errors for identifier-based editor tool invalid arguments and invalid buffers', function()
@@ -164,7 +196,7 @@ describe('mcp', function()
         local apply_missing_bufnr_result, apply_missing_bufnr_err = plugin.call_tool(
             'neovim/editor/apply_diff_buffer',
             {
-                content = 'after\n',
+                hunks = {},
             },
             {}
         )
@@ -172,35 +204,35 @@ describe('mcp', function()
             'neovim/editor/apply_diff_buffer',
             {
                 bufnr = 'nope',
-                content = 'after\n',
+                hunks = {},
             },
             {}
         )
         local apply_missing_bufnr_router = plugin.handle_request('tools/call', {
             name = 'neovim/editor/apply_diff_buffer',
             arguments = {
-                content = 'after\n',
+                hunks = {},
             },
         }, 210, {})
         local apply_invalid_bufnr_router = plugin.handle_request('tools/call', {
             name = 'neovim/editor/apply_diff_buffer',
             arguments = {
                 bufnr = 'nope',
-                content = 'after\n',
+                hunks = {},
             },
         }, 211, {})
         local apply_invalid_buffer_router = plugin.handle_request('tools/call', {
             name = 'neovim/editor/apply_diff_buffer',
             arguments = {
                 bufnr = invalid_bufnr,
-                content = 'after\n',
+                hunks = {},
             },
         }, 212, {})
-        local apply_invalid_content_result, apply_invalid_content_err = plugin.call_tool(
+        local apply_invalid_hunks_result, apply_invalid_hunks_err = plugin.call_tool(
             'neovim/editor/apply_diff_buffer',
             {
                 bufnr = current_bufnr,
-                content = false,
+                hunks = false,
             },
             {}
         )
@@ -208,7 +240,7 @@ describe('mcp', function()
             'neovim/editor/apply_diff_buffer',
             {
                 bufnr = invalid_bufnr,
-                content = 'after\n',
+                hunks = {},
             },
             {}
         )
@@ -297,9 +329,9 @@ describe('mcp', function()
             string.format('Invalid buffer id: %s', tostring(invalid_bufnr)),
             apply_invalid_buffer_router.error.message
         )
-        assert.is_nil(apply_invalid_content_result)
-        assert.are.equal(-32602, apply_invalid_content_err.code)
-        assert.are.equal('Invalid arguments: content must be a string', apply_invalid_content_err.message)
+        assert.is_nil(apply_invalid_hunks_result)
+        assert.are.equal(-32602, apply_invalid_hunks_err.code)
+        assert.are.equal('Invalid arguments: hunks must be a list', apply_invalid_hunks_err.message)
         assert.is_nil(apply_invalid_buffer_result)
         assert.are.equal(-32000, apply_invalid_buffer_err.code)
         assert.are.equal(

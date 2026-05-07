@@ -1032,6 +1032,66 @@ describe('mcp discovery and approvals', function()
         vim.fn.delete(root, 'rf')
     end)
 
+    it('discovers approval providers from runtimepath modules', function()
+        local plugin = require('ministry')
+        local provider_module = 'ministry.approval.providers.fixture'
+        local original_preload = package.preload[provider_module]
+        local original_loaded = package.loaded[provider_module]
+        local provider_requests = {}
+        local executed = false
+
+        package.loaded[provider_module] = nil
+        package.preload[provider_module] = function()
+            return {
+                request = function(request)
+                    table.insert(provider_requests, request)
+                    return 'allow'
+                end,
+            }
+        end
+
+        local ok, err = xpcall(function()
+            plugin.setup({
+                auto_start = false,
+                approval = {
+                    enabled = true,
+                    default = 'ask',
+                    persistence = false,
+                    providers = { 'fixture' },
+                },
+            })
+            plugin.register_server({
+                name = 'editor',
+                tools = {
+                    echo = {
+                        handler = function()
+                            executed = true
+                            return { ok = true }
+                        end,
+                    },
+                },
+            })
+
+            local result, call_err = plugin.call_tool('editor/echo', { message = 'hello' }, {})
+
+            assert.is_nil(call_err)
+            assert.are.same({ ok = true }, result)
+            assert.is_true(executed)
+            assert.are.equal(1, #provider_requests)
+            assert.are.equal('editor', provider_requests[1].server)
+            assert.are.equal('echo', provider_requests[1].method)
+            assert.are.equal('editor/echo', provider_requests[1].namespaced_name)
+            assert.are.same({ message = 'hello' }, provider_requests[1].arguments)
+        end, debug.traceback)
+
+        package.preload[provider_module] = original_preload
+        package.loaded[provider_module] = original_loaded
+
+        if not ok then
+            error(err)
+        end
+    end)
+
     it('summarizes native and external server state for the inspection UI', function()
         local plugin = require('ministry')
         plugin.setup({ auto_start = false })
