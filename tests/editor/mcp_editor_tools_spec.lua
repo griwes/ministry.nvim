@@ -93,7 +93,7 @@ describe('mcp editor tools', function()
         assert.are.equal(bufnr, diff_result.bufnr)
         assert.are.same({
             {
-                current_start = 2,
+                current_start = 3,
                 current_count = 0,
                 replacement = { 'more' },
             },
@@ -202,7 +202,31 @@ describe('mcp editor tools', function()
         assert.is_true(apply_result.modified)
     end)
 
-    it('applies zero-width insertions after the preceding line', function()
+    it('applies zero-width insertions before the addressed line', function()
+        local plugin = require('ministry')
+        plugin.setup()
+
+        local bufnr = vim.api.nvim_get_current_buf()
+
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'one', 'three' })
+
+        local result, err = plugin.call_tool('neovim/editor/apply_diff_buffer', {
+            bufnr = bufnr,
+            hunks = {
+                {
+                    current_start = 2,
+                    current_count = 0,
+                    replacement = { 'two' },
+                },
+            },
+        }, {})
+
+        assert.is_nil(err)
+        assert.is_true(result.modified)
+        assert.are.same({ 'one', 'two', 'three' }, vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+    end)
+
+    it('emits zero-width insertions before the following line', function()
         local plugin = require('ministry')
         plugin.setup()
 
@@ -240,7 +264,7 @@ describe('mcp editor tools', function()
         assert.is_nil(diff_err)
         assert.are.same({
             {
-                current_start = 3,
+                current_start = 4,
                 current_count = 0,
                 replacement = { '' },
             },

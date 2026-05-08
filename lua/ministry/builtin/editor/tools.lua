@@ -206,6 +206,7 @@ function M.specs()
                                 current_start = {
                                     type = 'integer',
                                     minimum = 0,
+                                    description = 'One-based current-buffer line before which this hunk is applied; use line_count + 1 to append at EOF. A value of 0 is accepted as start-of-buffer compatibility.',
                                 },
                                 current_count = {
                                     type = 'integer',
@@ -319,6 +320,7 @@ function M.specs()
                                 current_start = {
                                     type = 'integer',
                                     minimum = 0,
+                                    description = 'One-based current-buffer line before which this hunk is applied; use line_count + 1 to append at EOF. A value of 0 is accepted as start-of-buffer compatibility.',
                                 },
                                 current_count = {
                                     type = 'integer',

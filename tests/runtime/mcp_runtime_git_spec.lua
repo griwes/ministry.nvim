@@ -191,6 +191,11 @@ describe('mcp git builtin surfaces', function()
                                     status = {
                                         indexModified = true,
                                     },
+                                    diff = {
+                                        added = 4,
+                                        changed = 2,
+                                        removed = 1,
+                                    },
                                 },
                             },
                         },
@@ -239,6 +244,9 @@ describe('mcp git builtin surfaces', function()
         assert.is_true(payload.path_state.staged)
         assert.is_true(payload.path_state.dirty)
         assert.are.same({ 'staged' }, payload.path_state.categories)
+        assert.are.equal(4, payload.diff.added)
+        assert.are.equal(2, payload.diff.changed)
+        assert.are.equal(1, payload.diff.removed)
         assert.are.equal(relative, payload.entry.path)
         assert.is_nil(payload.conflict)
         assert.is_nil(payload.branches)
@@ -785,6 +793,11 @@ describe('mcp git builtin surfaces', function()
                                         workdirModified = true,
                                         conflicted = true,
                                     },
+                                    diff = {
+                                        added = 2,
+                                        changed = 3,
+                                        removed = 1,
+                                    },
                                 },
                             },
                         },
@@ -810,6 +823,9 @@ describe('mcp git builtin surfaces', function()
         assert.is_true(payload.path_state.unstaged)
         assert.is_true(payload.path_state.conflicted)
         assert.are.same({ 'staged', 'unstaged', 'conflicted' }, payload.path_state.categories)
+        assert.are.equal(2, payload.diff.added)
+        assert.are.equal(3, payload.diff.changed)
+        assert.are.equal(1, payload.diff.removed)
         assert.are.equal(relative, payload.entry.path)
         assert.are.equal(relative, payload.conflict.path)
     end)

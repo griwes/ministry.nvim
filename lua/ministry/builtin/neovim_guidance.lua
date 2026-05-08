@@ -493,7 +493,7 @@ function M.guidance(ctx)
             table.insert(
                 lines,
                 string.format(
-                    '- For file edits, call `%s/editor/apply_diff_file` with explicit generated `hunks` when you can identify exact line ranges. Use `%s/editor/diff_file` only when you need Ministry to compute hunks from target content, and `%s/editor/write_file` for exact full-buffer replacement; do not pass whole-file content to apply_diff tools.',
+                    '- For file edits, call `%s/editor/apply_diff_file` with explicit generated `hunks` when you can identify exact line ranges. Hunk `current_start` is the one-based current-buffer line before which the hunk applies, with `current_count = 0` inserting before that line and `line_count + 1` appending at EOF. Use `%s/editor/diff_file` only when you need Ministry to compute hunks from target content, and `%s/editor/write_file` for exact full-buffer replacement; do not pass whole-file content to apply_diff tools.',
                     server_name,
                     server_name,
                     server_name

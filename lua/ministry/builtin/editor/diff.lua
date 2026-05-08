@@ -39,6 +39,12 @@ local function diff_hunks(current_lines, target_lines)
             table.insert(replacement, target_lines[index])
         end
 
+        if count_current == 0 then
+            -- vim.diff reports insertions as "after current line N". Exposed
+            -- hunks use patch-style "before current line N" semantics instead.
+            start_current = start_current + 1
+        end
+
         table.insert(items, {
             current_start = start_current,
             current_count = count_current,
@@ -54,7 +60,7 @@ end
 local function apply_hunks_to_buffer(bufnr, hunks)
     for index = #hunks, 1, -1 do
         local hunk = hunks[index]
-        local start_index = hunk.current_count == 0 and hunk.current_start or hunk.current_start - 1
+        local start_index = math.max(hunk.current_start - 1, 0)
         vim.api.nvim_buf_set_lines(bufnr, start_index, start_index + hunk.current_count, false, hunk.replacement)
     end
 end

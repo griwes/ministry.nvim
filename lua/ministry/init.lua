@@ -553,6 +553,36 @@ function M.get_approval(server, method)
 end
 
 ---@param server string
+---@param method string
+---@param arguments table?
+---@param context table?
+---@return boolean, table|nil
+function M.request_approval(server, method, arguments, context)
+    return approval.request({
+        server = server,
+        method = method,
+        namespaced_name = string.format('%s/%s', server, method),
+        arguments = arguments or {},
+        context = context or {},
+    })
+end
+
+---@param server string
+---@param method string
+---@param arguments table?
+---@param context table?
+---@return boolean, table|nil
+function M.approve_once(server, method, arguments, context)
+    return approval.approve_once({
+        server = server,
+        method = method,
+        namespaced_name = string.format('%s/%s', server, method),
+        arguments = arguments or {},
+        context = context or {},
+    })
+end
+
+---@param server string
 ---@param method string|nil
 ---@param decision ministry.ApprovalDecision
 function M.set_approval(server, method, decision)

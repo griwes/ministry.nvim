@@ -309,6 +309,17 @@ local function path_categories(paths, path, entry)
     }
 end
 
+---@param entry table?
+---@return table
+local function path_diff(entry)
+    local diff = type(entry) == 'table' and type(entry.diff) == 'table' and entry.diff or {}
+    return {
+        added = type(diff.added) == 'number' and diff.added or 0,
+        changed = type(diff.changed) == 'number' and diff.changed or 0,
+        removed = type(diff.removed) == 'number' and diff.removed or 0,
+    }
+end
+
 ---@param stratum table
 ---@param snapshot table?
 ---@return table?
@@ -325,6 +336,52 @@ local function snapshot_summary(stratum, snapshot)
     end
 
     return nil
+end
+
+---@param stratum table
+---@param snapshot table?
+---@param path string?
+---@param paths table
+---@param entry table?
+---@return table
+local function path_summary(stratum, snapshot, path, paths, entry)
+    if type(snapshot) == 'table' and type(path) == 'string' and type(stratum.snapshot_path_summary) == 'function' then
+        local ok, summary = pcall(stratum.snapshot_path_summary, snapshot, path)
+        if ok and type(summary) == 'table' then
+            return summary
+        end
+    end
+
+    local summary = path_categories(paths, path, entry)
+    local diff = path_diff(entry)
+    summary.added = diff.added
+    summary.changed = diff.changed
+    summary.removed = diff.removed
+    return summary
+end
+
+---@param summary table
+---@return table
+local function path_state_from_summary(summary)
+    return {
+        staged = summary.staged == true,
+        unstaged = summary.unstaged == true,
+        untracked = summary.untracked == true,
+        ignored = summary.ignored == true,
+        conflicted = summary.conflicted == true,
+        dirty = summary.dirty == true,
+        categories = list_or_empty(summary.categories),
+    }
+end
+
+---@param summary table
+---@return table
+local function diff_from_summary(summary)
+    return {
+        added = type(summary.added) == 'number' and summary.added or 0,
+        changed = type(summary.changed) == 'number' and summary.changed or 0,
+        removed = type(summary.removed) == 'number' and summary.removed or 0,
+    }
 end
 
 ---@param repo table?
@@ -427,6 +484,7 @@ function M.repository_overview(path)
     local repo = repo_identity(state.repo)
     local relative = relative_path(repo and repo.root, path)
     local entry = path_entry(paths, relative)
+    local path_summary_payload = path_summary(stratum, snapshot, relative, paths, entry)
 
     local payload = {
         available = state.status == 'connected' and snapshot ~= nil,
@@ -443,7 +501,8 @@ function M.repository_overview(path)
             paths = path_counts(paths),
             refs = ref_counts(snapshot),
         },
-        path_state = path_categories(paths, relative, entry),
+        path_state = path_state_from_summary(path_summary_payload),
+        diff = diff_from_summary(path_summary_payload),
         entry = entry,
         conflict = conflict_entry(paths, relative),
     }
@@ -463,7 +522,7 @@ end
 ---@return table
 function M.path_state(path)
     path = path ~= nil and normalize_path(path) or current_buffer_path()
-    local unavailable, _, state = repository_state(path)
+    local unavailable, stratum, state = repository_state(path)
     if unavailable ~= nil then
         return unavailable
     end
@@ -474,6 +533,7 @@ function M.path_state(path)
     local relative = relative_path(repo and repo.root, path)
     local entry = path_entry(paths, relative)
     local conflict = conflict_entry(paths, relative)
+    local path_summary_payload = path_summary(stratum, snapshot, relative, paths, entry)
 
     return {
         available = state.status == 'connected' and snapshot ~= nil,
@@ -485,7 +545,8 @@ function M.path_state(path)
         stale = state.stale == true,
         last_error = state.last_error,
         snapshot_version = state.snapshot_version,
-        path_state = path_categories(paths, relative, entry),
+        path_state = path_state_from_summary(path_summary_payload),
+        diff = diff_from_summary(path_summary_payload),
         entry = entry,
         conflict = conflict,
     }

@@ -10,6 +10,16 @@ local store = {
     servers = {},
 }
 
+---@class ministry.PendingApproval
+---@field server string
+---@field method string
+---@field namespaced_name string
+---@field arguments table
+---@field tool_call_id? string
+
+---@type ministry.PendingApproval[]
+local pending_approvals = {}
+
 ---@type string?
 local loaded_path = nil
 
@@ -181,6 +191,97 @@ local function split_tool_name(namespaced_name)
 end
 
 ---@param request ministry.ApprovalRequest
+---@return string?
+local function approval_tool_call_id(request)
+    local context = type(request.context) == 'table' and request.context or {}
+    local tool_call_id = context.tool_call_id or context.legate_tool_call_id
+
+    return type(tool_call_id) == 'string' and tool_call_id ~= '' and tool_call_id or nil
+end
+
+---@param request ministry.ApprovalRequest
+---@return ministry.PendingApproval
+local function approval_entry(request)
+    return {
+        server = request.server,
+        method = request.method,
+        namespaced_name = request.namespaced_name,
+        arguments = vim.deepcopy(request.arguments or {}),
+        tool_call_id = approval_tool_call_id(request),
+    }
+end
+
+---@param entry ministry.PendingApproval
+---@param request ministry.ApprovalRequest
+---@return boolean
+local function approval_target_matches(entry, request)
+    return entry.server == request.server
+        and entry.method == request.method
+        and entry.namespaced_name == request.namespaced_name
+end
+
+---@param entry ministry.PendingApproval
+---@param request ministry.ApprovalRequest
+---@return boolean
+local function approval_payload_matches(entry, request)
+    return approval_target_matches(entry, request) and vim.deep_equal(entry.arguments, request.arguments or {})
+end
+
+---@param request ministry.ApprovalRequest
+local function remember_approval(request)
+    table.insert(pending_approvals, approval_entry(request))
+end
+
+---@param request ministry.ApprovalRequest
+---@return table
+local function mismatch_error(request)
+    return {
+        code = -32001,
+        message = string.format('Ministry approval payload mismatch for %s', request.namespaced_name),
+    }
+end
+
+---@param request ministry.ApprovalRequest
+---@return boolean|nil, table|nil
+local function consume_approval(request)
+    local tool_call_id = approval_tool_call_id(request)
+
+    if tool_call_id ~= nil then
+        for index, entry in ipairs(pending_approvals) do
+            if entry.tool_call_id == tool_call_id then
+                if approval_payload_matches(entry, request) then
+                    table.remove(pending_approvals, index)
+                    return true, nil
+                end
+
+                return false, mismatch_error(request)
+            end
+        end
+
+        return nil, nil
+    end
+
+    local has_pending_for_target = false
+
+    for index, entry in ipairs(pending_approvals) do
+        if approval_payload_matches(entry, request) then
+            table.remove(pending_approvals, index)
+            return true, nil
+        end
+
+        if approval_target_matches(entry, request) then
+            has_pending_for_target = true
+        end
+    end
+
+    if has_pending_for_target then
+        return false, mismatch_error(request)
+    end
+
+    return nil, nil
+end
+
+---@param request ministry.ApprovalRequest
 ---@param provider fun(request: ministry.ApprovalRequest): ministry.ApprovalDecision|boolean|nil
 ---@param label string
 ---@return boolean|nil, table|nil, boolean
@@ -249,11 +350,19 @@ local function check_discovered_providers(request)
 end
 
 ---@param request ministry.ApprovalRequest
----@param opts? { ignore_enabled?: boolean }
+---@param opts? { ignore_enabled?: boolean, ignore_pending?: boolean }
 ---@return boolean, table|nil
 function M.check(request, opts)
     if not config.get().approval.enabled and not (opts ~= nil and opts.ignore_enabled) then
         return true, nil
+    end
+
+    if not (opts ~= nil and opts.ignore_pending) then
+        local pending_approved, pending_err = consume_approval(request)
+
+        if pending_approved ~= nil then
+            return pending_approved, pending_err
+        end
     end
 
     local server = request.server
@@ -285,25 +394,30 @@ function M.check(request, opts)
         return approved, err
     end
 
-    if #vim.api.nvim_list_uis() == 0 then
-        return false,
-            {
-                code = -32001,
-                message = string.format('Ministry approval required for %s', request.namespaced_name),
-            }
-    end
-
-    local choice =
-        vim.fn.confirm(string.format('Allow Ministry MCP call %s?', request.namespaced_name), '&Allow\n&Reject', 2)
-    if choice == 1 then
-        return true, nil
-    end
-
     return false,
         {
             code = -32001,
-            message = string.format('Ministry approval rejected %s', request.namespaced_name),
+            message = string.format('Ministry approval required for %s', request.namespaced_name),
         }
+end
+
+---@param request ministry.ApprovalRequest
+---@return boolean, table|nil
+function M.request(request)
+    local approved, err = M.check(request, { ignore_pending = true })
+
+    if approved then
+        remember_approval(request)
+    end
+
+    return approved, err
+end
+
+---@param request ministry.ApprovalRequest
+---@return boolean, table|nil
+function M.approve_once(request)
+    remember_approval(request)
+    return true, nil
 end
 
 ---@param namespaced_name string
@@ -329,6 +443,7 @@ function M.reset()
     store = {
         servers = {},
     }
+    pending_approvals = {}
     loaded_path = nil
 end
 

@@ -1092,6 +1092,249 @@ describe('mcp discovery and approvals', function()
         end
     end)
 
+    it('returns an approval-required error instead of falling back to a message-area prompt', function()
+        local plugin = require('ministry')
+        local original_confirm = vim.fn.confirm
+        local confirm_called = false
+
+        vim.fn.confirm = function()
+            confirm_called = true
+            return 1
+        end
+
+        local ok, err = xpcall(function()
+            plugin.setup({
+                auto_start = false,
+                approval = {
+                    enabled = true,
+                    default = 'ask',
+                    persistence = false,
+                    providers = {},
+                },
+            })
+            plugin.register_server({
+                name = 'editor',
+                tools = {
+                    echo = {
+                        handler = function()
+                            return { ok = true }
+                        end,
+                    },
+                },
+            })
+
+            local result, call_err = plugin.call_tool('editor/echo', {}, {})
+
+            assert.is_nil(result)
+            assert.are.equal(-32001, call_err.code)
+            assert.is_true(call_err.message:find('approval required', 1, true) ~= nil)
+            assert.is_false(confirm_called)
+        end, debug.traceback)
+
+        vim.fn.confirm = original_confirm
+
+        if not ok then
+            error(err)
+        end
+    end)
+
+    it('requires Legate preapprovals to match the later MCP payload', function()
+        local plugin = require('ministry')
+        local provider_module = 'ministry.approval.providers.fixture'
+        local original_preload = package.preload[provider_module]
+        local original_loaded = package.loaded[provider_module]
+        local executions = {}
+
+        package.loaded[provider_module] = nil
+        package.preload[provider_module] = function()
+            return {
+                request = function()
+                    return 'allow'
+                end,
+            }
+        end
+
+        local ok, err = xpcall(function()
+            plugin.setup({
+                auto_start = false,
+                approval = {
+                    enabled = true,
+                    default = 'ask',
+                    persistence = false,
+                    providers = { 'fixture' },
+                },
+            })
+            plugin.register_server({
+                name = 'editor',
+                tools = {
+                    echo = {
+                        handler = function(arguments)
+                            table.insert(executions, arguments)
+                            return { ok = true, message = arguments.message }
+                        end,
+                    },
+                },
+            })
+
+            local approved, approval_err = plugin.request_approval(
+                'editor',
+                'echo',
+                { message = 'approved' },
+                { tool_call_id = 'tool_call_1' }
+            )
+            local mismatch_result, mismatch_err = plugin.call_tool(
+                'editor/echo',
+                { message = 'tampered' },
+                { tool_call_id = 'tool_call_1' }
+            )
+
+            assert.is_true(approved)
+            assert.is_nil(approval_err)
+            assert.is_nil(mismatch_result)
+            assert.are.equal(-32001, mismatch_err.code)
+            assert.is_true(mismatch_err.message:find('payload mismatch', 1, true) ~= nil)
+            assert.are.equal(0, #executions)
+
+            local result, call_err = plugin.call_tool(
+                'editor/echo',
+                { message = 'approved' },
+                { tool_call_id = 'tool_call_1' }
+            )
+
+            assert.is_nil(call_err)
+            assert.are.same({ ok = true, message = 'approved' }, result)
+            assert.are.equal(1, #executions)
+        end, debug.traceback)
+
+        package.preload[provider_module] = original_preload
+        package.loaded[provider_module] = original_loaded
+
+        if not ok then
+            error(err)
+        end
+    end)
+
+    it('records exact one-shot preapprovals without invoking approval providers', function()
+        local plugin = require('ministry')
+        local provider_module = 'ministry.approval.providers.fixture'
+        local original_preload = package.preload[provider_module]
+        local original_loaded = package.loaded[provider_module]
+        local provider_called = false
+
+        package.loaded[provider_module] = nil
+        package.preload[provider_module] = function()
+            return {
+                request = function()
+                    provider_called = true
+                    return nil
+                end,
+            }
+        end
+
+        local ok, err = xpcall(function()
+            plugin.setup({
+                auto_start = false,
+                approval = {
+                    enabled = true,
+                    default = 'ask',
+                    persistence = false,
+                    providers = { 'fixture' },
+                },
+            })
+            plugin.register_server({
+                name = 'editor',
+                tools = {
+                    echo = {
+                        handler = function(arguments)
+                            return { ok = true, message = arguments.message }
+                        end,
+                    },
+                },
+            })
+
+            local approved, approval_err = plugin.approve_once(
+                'editor',
+                'echo',
+                { message = 'approved' },
+                { tool_call_id = 'tool_call_approval_once' }
+            )
+            local result, call_err = plugin.call_tool(
+                'editor/echo',
+                { message = 'approved' },
+                { tool_call_id = 'tool_call_approval_once' }
+            )
+
+            assert.is_true(approved)
+            assert.is_nil(approval_err)
+            assert.is_false(provider_called)
+            assert.is_nil(call_err)
+            assert.are.same({ ok = true, message = 'approved' }, result)
+        end, debug.traceback)
+
+        package.preload[provider_module] = original_preload
+        package.loaded[provider_module] = original_loaded
+
+        if not ok then
+            error(err)
+        end
+    end)
+
+    it('rejects mismatched preapproval payloads when no tool-call id is available', function()
+        local plugin = require('ministry')
+        local provider_module = 'ministry.approval.providers.fixture'
+        local original_preload = package.preload[provider_module]
+        local original_loaded = package.loaded[provider_module]
+        local executed = false
+
+        package.loaded[provider_module] = nil
+        package.preload[provider_module] = function()
+            return {
+                request = function()
+                    return 'allow'
+                end,
+            }
+        end
+
+        local ok, err = xpcall(function()
+            plugin.setup({
+                auto_start = false,
+                approval = {
+                    enabled = true,
+                    default = 'ask',
+                    persistence = false,
+                    providers = { 'fixture' },
+                },
+            })
+            plugin.register_server({
+                name = 'editor',
+                tools = {
+                    echo = {
+                        handler = function()
+                            executed = true
+                            return { ok = true }
+                        end,
+                    },
+                },
+            })
+
+            local approved = plugin.request_approval('editor', 'echo', { message = 'approved' }, {})
+            local result, call_err = plugin.call_tool('editor/echo', { message = 'different' }, {})
+
+            assert.is_true(approved)
+            assert.is_nil(result)
+            assert.are.equal(-32001, call_err.code)
+            assert.is_true(call_err.message:find('payload mismatch', 1, true) ~= nil)
+            assert.is_false(executed)
+        end, debug.traceback)
+
+        package.preload[provider_module] = original_preload
+        package.loaded[provider_module] = original_loaded
+
+        if not ok then
+            error(err)
+        end
+    end)
+
     it('summarizes native and external server state for the inspection UI', function()
         local plugin = require('ministry')
         plugin.setup({ auto_start = false })
