@@ -8,6 +8,17 @@ local defaults = {
     http_token = nil,
     enable_terminal_tools = false,
     auto_start = true,
+    limits = {
+        http_body_bytes = 4 * 1024 * 1024,
+        http_header_bytes = 64 * 1024,
+        request_timeout_ms = 30000,
+        socket_line_bytes = 1024 * 1024,
+    },
+    terminal = {
+        max_output_bytes = 1024 * 1024,
+        max_wait_timeout_ms = 1000,
+        wait_timeout_ms = 100,
+    },
     external = {
         enabled = false,
         config = nil,
@@ -23,12 +34,13 @@ local defaults = {
         request_timeout_ms = 60000,
     },
     approval = {
-        enabled = false,
+        enabled = true,
         default = 'ask',
         persistence = true,
         path = nil,
         provider = nil,
         providers = { 'legate' },
+        reservation_ttl_ms = 30000,
     },
     ui = {
         width = 0.8,

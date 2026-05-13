@@ -72,7 +72,7 @@ end
 ---@param runtime ministry.ExternalRuntime
 ---@param method string
 ---@param params table
----@param opts? { notification?: boolean }
+---@param opts? { notification?: boolean, context?: table }
 ---@return table?, table?
 local function request_once(runtime, method, params, opts)
     local timeout = config.get().external.request_timeout_ms or 60000
@@ -94,6 +94,7 @@ local function request_once(runtime, method, params, opts)
             allow_empty_response = opts ~= nil and opts.notification or false,
             expected_id = expected_id,
             session_id = runtime.session_id,
+            context = opts ~= nil and opts.context or nil,
         })
         if meta ~= nil and meta.session_id ~= nil and meta.session_id ~= '' then
             runtime.session_id = meta.session_id
@@ -104,13 +105,13 @@ local function request_once(runtime, method, params, opts)
     if opts ~= nil and opts.notification then
         return {}, nil
     end
-    return stdio.request(spec, payload, timeout)
+    return stdio.request(spec, payload, timeout, opts ~= nil and opts.context or nil)
 end
 
 ---@param runtime ministry.ExternalRuntime
 ---@param method string
 ---@param params table
----@param opts? { notification?: boolean }
+---@param opts? { notification?: boolean, context?: table }
 ---@return table?, table?
 local function request(runtime, method, params, opts)
     local response, err = request_once(runtime, method, params, opts)
@@ -220,11 +221,11 @@ local function proxy_tool(runtime, tool)
         description = tool.description,
         input_schema = tool.inputSchema or tool.input_schema,
         ministry_source = runtime.spec.source,
-        handler = function(arguments)
+        handler = function(arguments, context)
             local response, err = request(runtime, 'tools/call', {
                 name = name,
                 arguments = arguments or {},
-            })
+            }, { context = context })
 
             if err ~= nil then
                 return nil, err
@@ -252,8 +253,8 @@ local function proxy_resource(runtime, resource)
         description = resource.description,
         mime_type = resource.mimeType or resource.mime_type,
         ministry_source = runtime.spec.source,
-        handler = function()
-            local response, err = request(runtime, 'resources/read', { uri = uri })
+        handler = function(_, context)
+            local response, err = request(runtime, 'resources/read', { uri = uri }, { context = context })
             if err ~= nil then
                 return nil, err
             end
@@ -279,7 +280,7 @@ local function proxy_resource_template(runtime, resource_template)
         description = resource_template.description,
         mime_type = resource_template.mimeType or resource_template.mime_type,
         ministry_source = runtime.spec.source,
-        handler = function(arguments)
+        handler = function(arguments, context)
             arguments = arguments or {}
             local uri = arguments.uri or arguments.namespaced_uri or ''
             local prefix = runtime.spec.name .. '/'
@@ -287,7 +288,7 @@ local function proxy_resource_template(runtime, resource_template)
                 uri = uri:sub(#prefix + 1)
             end
 
-            local response, err = request(runtime, 'resources/read', { uri = uri })
+            local response, err = request(runtime, 'resources/read', { uri = uri }, { context = context })
             if err ~= nil then
                 return nil, err
             end
@@ -312,12 +313,12 @@ local function proxy_prompt(runtime, prompt)
         description = prompt.description,
         arguments = prompt.arguments,
         ministry_source = runtime.spec.source,
-        handler = function(arguments)
+        handler = function(arguments, context)
             arguments = arguments or {}
             local response, err = request(runtime, 'prompts/get', {
                 name = name,
                 arguments = arguments.arguments or arguments,
-            })
+            }, { context = context })
             if err ~= nil then
                 return nil, err
             end

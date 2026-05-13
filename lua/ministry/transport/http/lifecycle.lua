@@ -69,6 +69,11 @@ end
 ---@return boolean, string?
 function M.start(state, deps)
     local descriptor = endpoint.describe_http()
+    local has_token = type(descriptor.http_token) == 'string' and vim.trim(descriptor.http_token) ~= ''
+
+    if not http_utils.is_loopback_host(descriptor.http_host) and not has_token then
+        return false, 'non-loopback Ministry HTTP endpoints require http_token authentication'
+    end
 
     if state.server ~= nil and not state.server:is_closing() then
         if state.startup_pending then

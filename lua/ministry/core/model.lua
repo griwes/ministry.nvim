@@ -1,6 +1,6 @@
 ---@class ministry.EndpointDescriptor
 ---@field transport 'socket'|'http'
----@field socket_kind? 'abstract'
+---@field socket_kind? 'filesystem'
 ---@field socket_name? string
 ---@field url? string
 ---@field http_host? string
@@ -92,6 +92,18 @@
 ---@field path? string
 ---@field provider? fun(request: ministry.ApprovalRequest): ministry.ApprovalDecision|boolean|nil
 ---@field providers string[]
+---@field reservation_ttl_ms integer
+
+---@class ministry.LimitsConfig
+---@field http_body_bytes integer
+---@field http_header_bytes integer
+---@field request_timeout_ms integer
+---@field socket_line_bytes integer
+
+---@class ministry.TerminalConfig
+---@field max_output_bytes integer
+---@field max_wait_timeout_ms integer
+---@field wait_timeout_ms integer
 
 ---@class ministry.ApprovalRequest
 ---@field server string
@@ -129,6 +141,8 @@
 ---@field http_port integer
 ---@field http_token? string
 ---@field auto_start boolean
+---@field limits ministry.LimitsConfig
+---@field terminal ministry.TerminalConfig
 ---@field external ministry.ExternalConfig
 ---@field approval ministry.ApprovalConfig
 ---@field ui ministry.UiConfig

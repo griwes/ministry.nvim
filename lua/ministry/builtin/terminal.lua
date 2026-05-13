@@ -86,6 +86,26 @@ local function validate_string_list(value, name, required)
     return result, nil
 end
 
+---@param value any
+---@param name string
+---@param maximum integer
+---@return integer|nil, table|nil
+local function validate_timeout(value, name, maximum)
+    if value == nil then
+        return nil, nil
+    end
+
+    if type(value) ~= 'number' or value % 1 ~= 0 or value < 0 or value > maximum then
+        return nil,
+            {
+                code = -32602,
+                message = string.format('Invalid arguments: %s must be an integer between 0 and %d', name, maximum),
+            }
+    end
+
+    return value, nil
+end
+
 ---@return table
 function M.tools_tree()
     return {
@@ -144,11 +164,16 @@ function M.tools_tree()
             end,
         },
         wait = {
-            description = 'Wait for a Neovim-owned terminal process surface to exit.',
+            description = 'Poll for a Neovim-owned terminal process to exit using a bounded wait.',
             input_schema = {
                 type = 'object',
                 properties = {
                     terminal_id = { type = 'string' },
+                    timeout_ms = {
+                        type = 'integer',
+                        minimum = 0,
+                        maximum = config.get().terminal.max_wait_timeout_ms,
+                    },
                 },
                 required = { 'terminal_id' },
             },
@@ -162,7 +187,13 @@ function M.tools_tree()
                     return nil, terminal_id_err
                 end
 
-                return runtime.wait(terminal_id)
+                local timeout_ms, timeout_err =
+                    validate_timeout(arguments.timeout_ms, 'timeout_ms', config.get().terminal.max_wait_timeout_ms)
+                if timeout_err ~= nil then
+                    return nil, timeout_err
+                end
+
+                return runtime.wait(terminal_id, timeout_ms)
             end,
         },
         release = {

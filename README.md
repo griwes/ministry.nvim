@@ -45,10 +45,12 @@ Example local `lazy.nvim` spec:
   - `neovim/terminals://list` for lightweight session-global Ministry-owned terminal runtime summaries
   - Ministry also provides generic per-list data-provider hooks for buffer and terminal inventories, so plugins such as `terminalia.nvim` can compute lightweight per-item metadata fresh when the list is read without making the list contract vendor-specific
   - a listed terminal can therefore include a lightweight `terminalia_context_stack` when that specific Ministry terminal has been associated with a Terminalia-owned creation context and Terminalia's provider callback returns stack data for that item
+- the default endpoint is a filesystem socket inside a mode-0700 directory under `stdpath('run')`; endpoint descriptors expose a `UNIX-CONNECT:` bridge invocation
 - the HTTP endpoint returns `204 No Content` with an empty body for JSON-RPC notifications, including notification-only batches
-- HTTP transport requires `Authorization: Bearer <token>` on application requests; browser CORS preflight `OPTIONS` requests are allowed without auth, while non-preflight `OPTIONS` requests still require the bearer token when `http_token` is set
+- loopback HTTP endpoints may omit authentication; non-loopback HTTP startup is rejected unless `http_token` is configured, and authenticated application requests require `Authorization: Bearer <token>`
+- transport framing, request lifetime, and terminal output retention are bounded through `limits` and `terminal` setup options
 
-- terminal tools execute host commands via Neovim and are disabled by default for safety
+- terminal tools execute host commands via Neovim and are disabled by default for safety; output is retained in bounded streaming buffers and `terminal/wait` is a bounded completion poll rather than an indefinite blocking wait
 
 ## External MCP servers
 
@@ -90,21 +92,28 @@ external server named `github` with a tool named `search` is advertised as
 
 ## Approvals and inspection
 
-Approvals are disabled by default. Enable them with:
+Approvals are enabled by default with an `ask` fallback. A local-only trusted
+configuration can opt out explicitly with:
 
 ```lua
 require('ministry').setup({
     approval = {
-        enabled = true,
-        default = 'ask',
+        enabled = false,
+        persistence = false,
     },
 })
 ```
 
 Policies are resolved as method rule, then server default, then global default.
-Supported decisions are `allow`, `reject`, and `ask`. Persistent policy is stored
-under `stdpath('state')/ministry/approvals.json` unless `approval.path` overrides
-it or `approval.persistence = false`.
+Supported decisions are `allow`, `reject`, and `ask`. Persistent policy keeps a
+compact index at `stdpath('state')/ministry/approvals.json` unless
+`approval.path` overrides it, and writes each server policy as a separate JSON
+file under `approval.path .. '.d'/servers/`. Disable persistence with
+`approval.persistence = false`.
+
+One-shot approvals are short-lived and bind to their originating transport or
+logical session when that identity is available. Disconnecting or cancelling
+that session removes its outstanding reservations.
 
 Useful commands:
 

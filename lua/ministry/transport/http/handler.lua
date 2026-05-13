@@ -213,7 +213,7 @@ function M.handle_http_request(client, request, deps)
             response_content_type,
             response_headers
         )
-    end)
+    end, deps.session_id)
 end
 
 return M

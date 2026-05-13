@@ -9,6 +9,7 @@ local http_reader = require('ministry.transport.http.reader')
 local http_response = require('ministry.transport.http.response')
 local http_utils = require('ministry.transport.http.utils')
 local endpoint = require('ministry.transport.endpoint')
+local protocol_session = require('ministry.protocol.session')
 
 local function notify_error(message, level)
     vim.schedule(function()
@@ -44,6 +45,11 @@ local state = {
     session_http_token = nil,
 }
 
+---@type table<uv_tcp_t, string>
+local client_sessions = {}
+---@type table<uv_tcp_t, uv_timer_t>
+local client_timers = {}
+
 local function has_session_http_token()
     return type(state.session_http_token) == 'string' and vim.trim(state.session_http_token) ~= ''
 end
@@ -62,6 +68,19 @@ end
 
 local function close_client(client)
     remove_client(client)
+
+    local session_id = client_sessions[client]
+    client_sessions[client] = nil
+    if session_id ~= nil then
+        protocol_session.close(session_id)
+    end
+
+    local timer = client_timers[client]
+    client_timers[client] = nil
+    if timer ~= nil and not timer:is_closing() then
+        timer:stop()
+        timer:close()
+    end
 
     if not client:is_closing() then
         if client.read_stop ~= nil then
@@ -89,6 +108,12 @@ local function send_json_response(client, status, body, keep_alive, http_version
 end
 
 function M._start_client_read(client, initial_buffer)
+    local session_id = client_sessions[client]
+    if session_id == nil then
+        session_id = protocol_session.open('http')
+        client_sessions[client] = session_id
+    end
+
     return http_reader.start_client_read(client, initial_buffer, {
         bound_host = state.bound_host,
         close_client = close_client,
@@ -102,11 +127,15 @@ function M._start_client_read(client, initial_buffer)
                 send_response = send_response,
                 server = state.server,
                 session_http_token = state.session_http_token,
+                session_id = session_id,
                 should_keep_alive = http_utils.should_keep_alive,
             })
         end,
         notify_error = notify_error,
         requested_host = state.requested_host,
+        set_client_timer = function(target_client, timer)
+            client_timers[target_client] = timer
+        end,
         send_json_response = send_json_response,
         send_response = send_response,
         server = state.server,
@@ -127,6 +156,24 @@ function M.start()
 end
 
 function M.stop()
+    local seen = {}
+    local active_clients = {}
+    for _, client in ipairs(state.clients) do
+        table.insert(active_clients, client)
+        seen[client] = true
+    end
+    for client in pairs(client_sessions) do
+        if not seen[client] then
+            table.insert(active_clients, client)
+        end
+    end
+    for _, client in ipairs(active_clients) do
+        close_client(client)
+    end
+
+    client_sessions = {}
+    client_timers = {}
+
     return http_lifecycle.stop(state)
 end
 

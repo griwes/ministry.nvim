@@ -2,7 +2,7 @@ describe('mcp mason builtin surfaces', function()
     local original_registry
 
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
         original_registry = package.loaded['mason-registry']
     end)
 
@@ -14,7 +14,7 @@ describe('mcp mason builtin surfaces', function()
         package.loaded['mason-registry'] = nil
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/mason://inventory',
@@ -45,7 +45,7 @@ describe('mcp mason builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/mason://inventory',

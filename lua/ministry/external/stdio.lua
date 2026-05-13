@@ -213,8 +213,9 @@ end
 ---@param spec ministry.ExternalServerSpec
 ---@param payload table
 ---@param timeout_ms integer
+---@param context? table
 ---@return table?, table?
-function M.request(spec, payload, timeout_ms)
+function M.request(spec, payload, timeout_ms, context)
     local client, start_err = M.start(spec)
     if client == nil then
         return nil, start_err
@@ -225,6 +226,24 @@ function M.request(spec, payload, timeout_ms)
     payload.id = id
     payload.jsonrpc = payload.jsonrpc or '2.0'
     client.pending[id] = {}
+    local cancelled = false
+    local cancel_reason = nil
+    local unregister_cancellation = nil
+
+    if type(context) == 'table' and type(context.register_cancellation) == 'function' then
+        unregister_cancellation = context.register_cancellation(function(reason)
+            cancelled = true
+            cancel_reason = reason
+            vim.fn.chansend(client.job, vim.json.encode({
+                jsonrpc = '2.0',
+                method = 'notifications/cancelled',
+                params = {
+                    requestId = id,
+                    reason = reason,
+                },
+            }) .. '\n')
+        end)
+    end
 
     vim.fn.chansend(client.job, vim.json.encode(payload) .. '\n')
 
@@ -233,8 +252,21 @@ function M.request(spec, payload, timeout_ms)
     end
 
     local ok = vim.wait(timeout_ms, function()
-        return client.exited or has_response()
+        return cancelled or client.exited or has_response()
     end, 10)
+
+    if unregister_cancellation ~= nil then
+        unregister_cancellation()
+    end
+
+    if cancelled then
+        client.pending[id] = nil
+        return nil,
+            {
+                code = -32800,
+                message = cancel_reason or string.format('stdio MCP request %s cancelled', spec.name),
+            }
+    end
 
     if not ok then
         client.pending[id] = nil

@@ -1,6 +1,6 @@
 describe('mcp quickfix builtin surfaces', function()
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
         vim.cmd('silent! cexpr []')
         vim.cmd('silent! lexpr []')
     end)
@@ -45,7 +45,7 @@ describe('mcp quickfix builtin surfaces', function()
         vim.fn.setloclist(0, {}, 'a', { idx = 1 })
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local qf_response = plugin.handle_request('resources/read', {
             uri = 'neovim/quickfix://summary',
@@ -80,7 +80,7 @@ describe('mcp quickfix builtin surfaces', function()
 
     it('returns stable empty quickfix and location-list payloads', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local qf_response = plugin.handle_request('resources/read', {
             uri = 'neovim/quickfix://summary',

@@ -12,6 +12,7 @@ local builtin_neovim_guidance = require('ministry.builtin.neovim_guidance')
 local builtin_overseer = require('ministry.builtin.overseer.init')
 local builtin_quickfix = require('ministry.builtin.quickfix.init')
 local builtin_terminal = require('ministry.builtin.terminal')
+local builtin_terminal_lifecycle = require('ministry.builtin.terminal_lifecycle')
 local builtin_terminal_runtime = require('ministry.builtin.terminal_runtime')
 local approval = require('ministry.approval.policy')
 local dispatch = require('ministry.protocol.dispatch')
@@ -20,6 +21,7 @@ local external = require('ministry.external.manager')
 local list_attachments = require('ministry.resources.list_providers')
 local registry = require('ministry.core.registry')
 local router = require('ministry.protocol.router')
+local protocol_session = require('ministry.protocol.session')
 local server = require('ministry.transport.server')
 local http_server = require('ministry.transport.http.server')
 
@@ -30,6 +32,8 @@ local builtin_neovim_overrides = nil
 local builtin_neovim_mode = 'builtin'
 local commands_registered = false
 local merge_named_specs
+---@type table<'socket'|'http', boolean>
+local setup_owned_transports = {}
 
 local function socket_transport_supported()
     local pipe = vim.uv.new_pipe(false)
@@ -426,6 +430,60 @@ local function register_commands()
     commands_registered = true
 end
 
+---@param transport 'socket'|'http'
+---@return boolean
+local function setup_wants_transport(transport, configured_transport)
+    if transport == 'http' then
+        return configured_transport == 'http'
+    end
+
+    return configured_transport == 'socket' or configured_transport == 'http'
+end
+
+---@param configured_transport 'socket'|'http'
+local function stop_setup_owned_transports_not_wanted(configured_transport)
+    for _, transport in ipairs({ 'http', 'socket' }) do
+        if setup_owned_transports[transport] and not setup_wants_transport(transport, configured_transport) then
+            server.stop_transport(transport)
+            setup_owned_transports[transport] = nil
+        end
+    end
+end
+
+---@param configured_transport 'socket'|'http'
+local function start_setup_transport(configured_transport)
+    local running_before = {
+        socket = server.transport_running('socket'),
+        http = server.transport_running('http'),
+    }
+    server.start(configured_transport)
+
+    for _, transport in ipairs({ 'socket', 'http' }) do
+        if not running_before[transport] and server.transport_running(transport) then
+            setup_owned_transports[transport] = true
+        end
+    end
+end
+
+local function stop_setup_owned_transports()
+    for _, transport in ipairs({ 'http', 'socket' }) do
+        if setup_owned_transports[transport] then
+            server.stop_transport(transport)
+        end
+    end
+
+    setup_owned_transports = {}
+end
+
+local function setup_terminalia_integration()
+    local ok, terminalia = pcall(require, 'terminalia')
+    if ok and type(terminalia) == 'table' and type(terminalia.api) == 'table' then
+        if type(terminalia.api.setup_ministry_integration) == 'function' then
+            pcall(terminalia.api.setup_ministry_integration)
+        end
+    end
+end
+
 ---@param opts? Partial<ministry.Config>
 ---@return ministry.Config
 function M.setup(opts)
@@ -434,17 +492,21 @@ function M.setup(opts)
     approval.load()
     register_builtin_neovim_server(builtin_neovim_overrides)
     register_commands()
+    setup_terminalia_integration()
     if applied.external.enabled then
         external.discover()
     end
 
     if applied.auto_start then
         local transport = applied.transport or 'socket'
+        stop_setup_owned_transports_not_wanted(transport)
         if transport == 'http' then
-            server.start(transport)
+            start_setup_transport(transport)
         elseif transport == 'socket' and socket_transport_supported() then
-            server.start(transport)
+            start_setup_transport(transport)
         end
+    else
+        stop_setup_owned_transports()
     end
 
     return applied
@@ -563,7 +625,7 @@ function M.request_approval(server, method, arguments, context)
         method = method,
         namespaced_name = string.format('%s/%s', server, method),
         arguments = arguments or {},
-        context = context or {},
+        context = protocol_session.bind_approval_context(context),
     })
 end
 
@@ -578,7 +640,7 @@ function M.approve_once(server, method, arguments, context)
         method = method,
         namespaced_name = string.format('%s/%s', server, method),
         arguments = arguments or {},
-        context = context or {},
+        context = protocol_session.bind_approval_context(context),
     })
 end
 
@@ -780,6 +842,7 @@ end
 
 function M.stop()
     server.stop()
+    setup_owned_transports = {}
 end
 
 ---@return boolean
@@ -812,6 +875,19 @@ function M.unregister_list_item_data_provider(list_name, owner)
     return list_attachments.unregister(list_name, owner)
 end
 
+---@param owner string
+---@param listener ministry.TerminalLifecycleListener
+---@return table|nil, table|nil
+function M.register_terminal_lifecycle_listener(owner, listener)
+    return builtin_terminal_lifecycle.register(owner, listener)
+end
+
+---@param owner string
+---@return table|nil, table|nil
+function M.unregister_terminal_lifecycle_listener(owner)
+    return builtin_terminal_lifecycle.unregister(owner)
+end
+
 ---@return ministry.EndpointDescriptor?
 function M.http_endpoint()
     local host, port = http_server.bound_address()
@@ -828,10 +904,12 @@ function M.reset()
     builtin_neovim_mode = 'builtin'
 
     server.stop()
+    setup_owned_transports = {}
     http_server.stop()
     builtin_terminal_runtime.reset()
     external.reset()
     approval.reset()
+    protocol_session.reset()
     endpoint.reset()
     config.reset()
     registry.reset()

@@ -33,8 +33,8 @@ local ok, err = pcall(function()
     local plugin = require('ministry')
     local dap = require('dap')
 
-    plugin.reset()
-    plugin.setup()
+    require('tests.helpers.ministry').reset(plugin)
+    require('tests.helpers.ministry').setup(plugin)
 
     local fixture_path = fixture_dir .. '/sample_debuggee.py'
     vim.fn.writefile({

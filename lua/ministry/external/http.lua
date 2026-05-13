@@ -10,6 +10,7 @@ local MAX_ERROR_DETAIL_BYTES = 500
 ---@field allow_empty_response? boolean
 ---@field expected_id? integer
 ---@field session_id? string
+---@field context? table
 
 ---@type fun(spec: ministry.ExternalServerSpec, payload: table, timeout_ms: integer, opts?: ministry.HttpRequestOpts): table?, table?, ministry.HttpRequestMeta?
 local request_impl
@@ -263,11 +264,35 @@ local function curl_request(spec, payload, timeout_ms, opts)
     table.insert(args, '@-')
     table.insert(args, spec.url)
 
-    local result = vim.system(vim.list_extend({ 'curl' }, args), {
+    local process = vim.system(vim.list_extend({ 'curl' }, args), {
         text = true,
         stdin = vim.json.encode(payload),
         timeout = timeout_ms,
-    }):wait()
+    })
+    local cancelled = false
+    local cancel_reason = nil
+    local unregister_cancellation = nil
+
+    if type(opts.context) == 'table' and type(opts.context.register_cancellation) == 'function' then
+        unregister_cancellation = opts.context.register_cancellation(function(reason)
+            cancelled = true
+            cancel_reason = reason
+            pcall(process.kill, process, 15)
+        end)
+    end
+
+    local result = process:wait()
+    if unregister_cancellation ~= nil then
+        unregister_cancellation()
+    end
+
+    if cancelled then
+        return nil,
+            {
+                code = -32800,
+                message = cancel_reason or 'HTTP MCP request cancelled',
+            }
+    end
 
     if result.code ~= 0 then
         local detail = first_compact_detail(result.stderr, result.stdout, result.code)

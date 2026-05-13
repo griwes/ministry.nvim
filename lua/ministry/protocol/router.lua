@@ -29,6 +29,20 @@ local function split_qualified_tool_name(name)
     return server_name, tool_name
 end
 
+---@param tool_name string
+---@return string
+local function normalize_split_tool_name(tool_name)
+    if type(tool_name) ~= 'string' then
+        return tool_name
+    end
+
+    if tool_name:find('/', 1, true) ~= nil then
+        return tool_name
+    end
+
+    return tool_name:gsub('__', '/')
+end
+
 ---@param name string
 ---@param server string
 ---@param tool string
@@ -75,18 +89,6 @@ end
 
 ---@param tool_name string
 ---@return string
-local function normalize_split_tool_name(tool_name)
-    if type(tool_name) ~= 'string' then
-        return tool_name
-    end
-
-    if tool_name:find('/', 1, true) ~= nil then
-        return tool_name
-    end
-
-    return tool_name:gsub('__', '/')
-end
-
 ---@param value any
 ---@return boolean
 local function is_content_list(value)
@@ -320,6 +322,17 @@ function M.handle_request(method, params, id, context)
     end
 
     if method == 'notifications/initialized' then
+        return nil
+    end
+
+    if method == 'notifications/cancelled' then
+        local request_id = type(params) == 'table' and params.requestId or nil
+        if request_id ~= nil and type(context) == 'table' and type(context.cancel_request) == 'function' then
+            context.cancel_request(
+                request_id,
+                type(params.reason) == 'string' and params.reason or 'cancelled by client'
+            )
+        end
         return nil
     end
 

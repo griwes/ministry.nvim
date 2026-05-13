@@ -2,7 +2,7 @@ describe('mcp overseer builtin surfaces', function()
     local original_overseer
 
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
         original_overseer = package.loaded['overseer']
     end)
 
@@ -55,7 +55,7 @@ describe('mcp overseer builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/tasks://summary',
@@ -84,7 +84,7 @@ describe('mcp overseer builtin surfaces', function()
         package.loaded['overseer'] = nil
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/tasks://summary',

@@ -1,4 +1,5 @@
 local cors = require('ministry.transport.http.cors')
+local config = require('ministry.core.config')
 local http_jsonrpc = require('ministry.transport.http.jsonrpc')
 local http_request = require('ministry.transport.http.request')
 
@@ -14,11 +15,49 @@ function M.start_client_read(client, initial_buffer, deps)
     end
     local buffer = ((state and state._mcp_http_buffer) or '')
     local reading = false
+    local deadline_armed = false
+    local deadline_timer = vim.uv.new_timer()
+
+    if deadline_timer ~= nil and type(deps.set_client_timer) == 'function' then
+        deps.set_client_timer(client, deadline_timer)
+    end
 
     local function sync_buffer()
         if state ~= nil then
             state._mcp_http_buffer = buffer
         end
+    end
+
+    local function disarm_deadline()
+        if deadline_timer ~= nil and not deadline_timer:is_closing() and deadline_armed then
+            deadline_timer:stop()
+        end
+        deadline_armed = false
+    end
+
+    local function arm_deadline()
+        if deadline_timer == nil or deadline_timer:is_closing() or deadline_armed or buffer == '' then
+            return
+        end
+
+        deadline_armed = true
+        local timeout_ms = math.max(1, tonumber(config.get().limits.request_timeout_ms) or 30000)
+        deadline_timer:start(timeout_ms, 0, function()
+            deadline_armed = false
+            if client:is_closing() then
+                return
+            end
+
+            buffer = ''
+            sync_buffer()
+            deps.send_json_response(
+                client,
+                408,
+                vim.json.encode({ error = 'request deadline exceeded' }),
+                false,
+                'HTTP/1.1'
+            )
+        end)
     end
 
     local function dispatch_requests()
@@ -29,8 +68,11 @@ function M.start_client_read(client, initial_buffer, deps)
                 local effective_err = consumed_or_err or parse_err
 
                 if effective_err == nil then
+                    arm_deadline()
                     return
                 end
+
+                disarm_deadline()
 
                 local request_version = nil
                 local first_line = buffer:match('^([^\r\n]+)')
@@ -58,10 +100,13 @@ function M.start_client_read(client, initial_buffer, deps)
                 })
                 buffer = ''
                 sync_buffer()
+                local status = effective_err == 'http headers exceed configured limit' and 431
+                    or effective_err == 'http body exceeds configured limit' and 413
+                    or 200
                 deps.send_json_response(
                     client,
-                    200,
-                    vim.json.encode(response),
+                    status,
+                    status == 200 and vim.json.encode(response) or vim.json.encode({ error = effective_err }),
                     false,
                     request_version,
                     nil,
@@ -70,12 +115,17 @@ function M.start_client_read(client, initial_buffer, deps)
                 return
             end
 
+            disarm_deadline()
             buffer = buffer:sub(consumed_or_err + 1)
             sync_buffer()
             deps.handle_http_request(client, request)
 
             if client:is_closing() then
                 return
+            end
+
+            if buffer == '' then
+                disarm_deadline()
             end
         end
     end

@@ -2,6 +2,7 @@ local config = require('ministry.core.config')
 local endpoint = require('ministry.transport.endpoint')
 local jsonrpc = require('ministry.transport.http.jsonrpc')
 local http_server = require('ministry.transport.http.server')
+local protocol_session = require('ministry.protocol.session')
 
 local M = {}
 
@@ -9,6 +10,12 @@ local M = {}
 local listener = nil
 ---@type uv_pipe_t[]
 local clients = {}
+---@type table<uv_pipe_t, string>
+local client_sessions = {}
+---@type table<uv_pipe_t, uv_timer_t>
+local client_timers = {}
+---@type string?
+local listener_socket_path = nil
 
 local function notify_error(message, level)
     vim.schedule(function()
@@ -39,8 +46,23 @@ end
 local function close_client(client)
     remove_client(client)
 
+    local session_id = client_sessions[client]
+    client_sessions[client] = nil
+    if session_id ~= nil then
+        protocol_session.close(session_id)
+    end
+
+    local timer = client_timers[client]
+    client_timers[client] = nil
+    if timer ~= nil and not timer:is_closing() then
+        timer:stop()
+        timer:close()
+    end
+
     if not client:is_closing() then
-        client:read_stop()
+        if client.read_stop ~= nil then
+            client:read_stop()
+        end
         client:close()
     end
 end
@@ -48,6 +70,11 @@ end
 local function close_listener()
     close_handle(listener)
     listener = nil
+
+    if listener_socket_path ~= nil then
+        vim.uv.fs_unlink(listener_socket_path)
+        listener_socket_path = nil
+    end
 end
 
 local function socket_transport_supported()
@@ -68,9 +95,8 @@ local function write_message(client, message)
     client:write(vim.json.encode(message) .. '\n')
 end
 
-local function handle_line(client, line, on_done)
+local function handle_line(client, session_id, line)
     if line == '' then
-        on_done()
         return
     end
 
@@ -85,7 +111,6 @@ local function handle_line(client, line, on_done)
                 message = tostring(message),
             },
         })
-        on_done()
         return
     end
 
@@ -93,78 +118,102 @@ local function handle_line(client, line, on_done)
         if response ~= nil and not client:is_closing() then
             write_message(client, response)
         end
-
-        on_done()
-    end)
+    end, session_id)
 end
 
-local function start_client_read(client)
+local function start_client_read(client, session_id)
     local buffer = ''
-    local lines = {}
-    local dispatching = false
-    local reading = false
+    local max_line_bytes = math.max(1, tonumber(config.get().limits.socket_line_bytes) or 1024 * 1024)
+    local deadline_armed = false
+    local deadline_timer = vim.uv.new_timer()
+    client_timers[client] = deadline_timer
 
-    local pump
-    local ensure_reading
+    local function disarm_deadline()
+        if deadline_timer ~= nil and not deadline_timer:is_closing() and deadline_armed then
+            deadline_timer:stop()
+        end
+        deadline_armed = false
+    end
 
-    pump = function()
-        if dispatching or client:is_closing() then
+    local function arm_deadline()
+        if deadline_timer == nil or deadline_timer:is_closing() or deadline_armed or buffer == '' then
             return
         end
 
-        local line = table.remove(lines, 1)
-        if line == nil then
-            ensure_reading()
-            return
-        end
+        deadline_armed = true
+        local timeout_ms = math.max(1, tonumber(config.get().limits.request_timeout_ms) or 30000)
+        deadline_timer:start(timeout_ms, 0, function()
+            deadline_armed = false
+            if client:is_closing() then
+                return
+            end
 
-        dispatching = true
-        handle_line(client, line, function()
-            dispatching = false
-            pump()
+            write_message(client, {
+                jsonrpc = '2.0',
+                id = vim.NIL,
+                error = {
+                    code = -32000,
+                    message = 'Ministry socket request deadline exceeded',
+                },
+            })
+            close_client(client)
         end)
     end
 
-    ensure_reading = function()
-        if client:is_closing() or reading or dispatching then
+    client:read_start(function(err, data)
+        if err ~= nil then
+            notify_error('mcp socket client read error: ' .. tostring(err), vim.log.levels.WARN)
+            close_client(client)
             return
         end
 
-        reading = true
-        client:read_start(function(err, data)
-            reading = false
-            if err ~= nil then
-                notify_error('mcp socket client read error: ' .. tostring(err), vim.log.levels.WARN)
+        if data == nil then
+            close_client(client)
+            return
+        end
+
+        buffer = buffer .. data
+
+        while true do
+            local newline = buffer:find('\n', 1, true)
+            if newline == nil then
+                break
+            end
+
+            local line = buffer:sub(1, newline - 1)
+            buffer = buffer:sub(newline + 1)
+            disarm_deadline()
+            if #line > max_line_bytes then
+                write_message(client, {
+                    jsonrpc = '2.0',
+                    id = vim.NIL,
+                    error = {
+                        code = -32000,
+                        message = 'Ministry socket request exceeds configured line limit',
+                    },
+                })
                 close_client(client)
                 return
             end
 
-            if data == nil then
-                close_client(client)
-                return
-            end
+            handle_line(client, session_id, line)
+        end
 
-            buffer = buffer .. data
+        if #buffer > max_line_bytes then
+            write_message(client, {
+                jsonrpc = '2.0',
+                id = vim.NIL,
+                error = {
+                    code = -32000,
+                    message = 'Ministry socket request exceeds configured line limit',
+                },
+            })
+            close_client(client)
+            return
+        end
 
-            while true do
-                local newline = buffer:find('\n', 1, true)
-
-                if newline == nil then
-                    break
-                end
-
-                table.insert(lines, buffer:sub(1, newline - 1))
-                buffer = buffer:sub(newline + 1)
-            end
-
-            if client.read_stop ~= nil then
-                client:read_stop()
-            end
-            pump()
-        end)
-    end
-
-    ensure_reading()
+        arm_deadline()
+    end)
 end
 
 ---@return boolean, string?
@@ -177,7 +226,8 @@ function M.start_socket()
 
     local descriptor = endpoint.describe_socket()
     local new_listener = assert(vim.uv.new_pipe(false))
-    local ok, err = new_listener:bind2('\0' .. descriptor.socket_name, 0)
+    vim.uv.fs_unlink(descriptor.socket_name)
+    local ok, err = new_listener:bind2(descriptor.socket_name, 0)
 
     if ok ~= 0 then
         close_handle(new_listener)
@@ -200,7 +250,9 @@ function M.start_socket()
         end
 
         table.insert(clients, client)
-        start_client_read(client)
+        local session_id = protocol_session.open('socket')
+        client_sessions[client] = session_id
+        start_client_read(client, session_id)
     end)
 
     if listen_ok == nil or listen_ok == false then
@@ -209,6 +261,7 @@ function M.start_socket()
     end
 
     listener = new_listener
+    listener_socket_path = descriptor.socket_name
     return true, nil
 end
 
@@ -221,6 +274,7 @@ end
 ---@return boolean, string?
 function M.start(transport)
     if transport == 'http' then
+        local socket_was_running = listener ~= nil and not listener:is_closing()
         if socket_transport_supported() then
             local socket_ok, socket_err = M.start_socket()
             if not socket_ok then
@@ -228,7 +282,11 @@ function M.start(transport)
             end
         end
 
-        return M.start_http()
+        local http_ok, http_err = M.start_http()
+        if not http_ok and not socket_was_running then
+            M.stop_socket()
+        end
+        return http_ok, http_err
     end
 
     if transport ~= 'socket' then
@@ -246,6 +304,7 @@ end
 
 ---@return boolean, string?
 function M.start_all()
+    local socket_was_running = listener ~= nil and not listener:is_closing()
     if socket_transport_supported() then
         local ok, err = M.start_socket()
 
@@ -258,26 +317,69 @@ function M.start_all()
         return true, nil
     end
 
-    return M.start_http()
+    local http_ok, http_err = M.start_http()
+    if not http_ok and not socket_was_running then
+        M.stop_socket()
+    end
+    return http_ok, http_err
 end
 
-function M.stop()
-    http_server.stop()
-
+function M.stop_socket()
+    local active_clients = {}
     for _, client in ipairs(clients) do
-        if not client:is_closing() then
-            client:read_stop()
-            client:close()
-        end
+        table.insert(active_clients, client)
+    end
+    for _, client in ipairs(active_clients) do
+        close_client(client)
     end
 
     clients = {}
+    client_sessions = {}
+    client_timers = {}
     close_listener()
+end
+
+function M.stop_http()
+    http_server.stop()
+end
+
+---@param transport 'socket'|'http'
+function M.stop_transport(transport)
+    if transport == 'socket' then
+        M.stop_socket()
+        return
+    end
+
+    if transport == 'http' then
+        M.stop_http()
+        return
+    end
+
+    error(string.format('unsupported transport: %s', transport))
+end
+
+function M.stop()
+    M.stop_http()
+    M.stop_socket()
+end
+
+---@param transport 'socket'|'http'
+---@return boolean
+function M.transport_running(transport)
+    if transport == 'socket' then
+        return listener ~= nil
+    end
+
+    if transport == 'http' then
+        return http_server.running()
+    end
+
+    return false
 end
 
 ---@return boolean
 function M.running()
-    return listener ~= nil or http_server.running()
+    return M.transport_running('socket') or M.transport_running('http')
 end
 
 ---@return table

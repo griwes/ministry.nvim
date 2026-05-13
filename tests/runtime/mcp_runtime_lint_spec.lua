@@ -2,7 +2,7 @@ describe('mcp lint builtin surfaces', function()
     local original_lint
 
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
         original_lint = package.loaded['lint']
     end)
 
@@ -14,7 +14,7 @@ describe('mcp lint builtin surfaces', function()
         package.loaded['lint'] = nil
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/lint://summary',
@@ -39,7 +39,7 @@ describe('mcp lint builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/lint://summary',

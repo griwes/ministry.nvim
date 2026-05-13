@@ -1,3 +1,5 @@
+local config = require('ministry.core.config')
+
 local M = {}
 
 local function append_header_value(headers, name, value)
@@ -43,6 +45,9 @@ function M.parse_request(raw)
 
     local header_start, header_finish = raw:find('\r\n\r\n', 1, true)
     local newline = '\r\n'
+    local limits = config.get().limits
+    local max_header_bytes = math.max(1, tonumber(limits.http_header_bytes) or 64 * 1024)
+    local max_body_bytes = math.max(1, tonumber(limits.http_body_bytes) or 4 * 1024 * 1024)
 
     if header_start == nil or header_finish == nil then
         header_start, header_finish = raw:find('\n\n', 1, true)
@@ -56,7 +61,14 @@ function M.parse_request(raw)
     end
 
     if header_start == nil or header_finish == nil then
+        if #raw > max_header_bytes then
+            return nil, nil, 'http headers exceed configured limit'
+        end
         return nil
+    end
+
+    if header_start - 1 > max_header_bytes then
+        return nil, nil, 'http headers exceed configured limit'
     end
 
     local head = raw:sub(1, header_start - 1)
@@ -121,6 +133,9 @@ function M.parse_request(raw)
                     end
 
                     content_length = parsed_value
+                    if content_length > max_body_bytes then
+                        return nil, nil, 'http body exceeds configured limit'
+                    end
                 elseif lower_name == 'content-type' and type(headers[lower_name]) == 'table' then
                     return nil, nil, 'duplicate content-type'
                 end

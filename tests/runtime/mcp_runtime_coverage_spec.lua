@@ -2,7 +2,7 @@ describe('mcp coverage builtin surfaces', function()
     local original_report
 
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
         original_report = package.loaded['coverage.report']
     end)
 
@@ -18,7 +18,7 @@ describe('mcp coverage builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/coverage://summary',
@@ -65,7 +65,7 @@ describe('mcp coverage builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/coverage://summary',

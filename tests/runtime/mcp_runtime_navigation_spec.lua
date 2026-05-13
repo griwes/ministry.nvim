@@ -2,8 +2,14 @@ describe('mcp navigation builtin surfaces', function()
     local temp_path
     local original_cwd
 
+    local function clear_marks()
+        pcall(vim.cmd, 'delmarks!')
+        pcall(vim.cmd, 'delmarks A-Z0-9')
+    end
+
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
+        clear_marks()
         original_cwd = vim.fn.getcwd()
         temp_path = vim.fs.normalize(vim.fn.tempname() .. '.lua')
         vim.fn.writefile({ 'first', 'second', 'third' }, temp_path)
@@ -11,7 +17,7 @@ describe('mcp navigation builtin surfaces', function()
     end)
 
     after_each(function()
-        pcall(vim.cmd, 'delmarks aA')
+        clear_marks()
         pcall(vim.cmd, 'bdelete!')
         pcall(vim.fn.delete, temp_path)
         if original_cwd ~= nil then
@@ -21,12 +27,12 @@ describe('mcp navigation builtin surfaces', function()
 
     it('returns structured local and global marks', function()
         vim.api.nvim_win_set_cursor(0, { 2, 1 })
-        vim.cmd("normal! ma")
+        vim.cmd('normal! ma')
         vim.api.nvim_win_set_cursor(0, { 3, 0 })
-        vim.cmd("normal! mA")
+        vim.cmd('normal! mA')
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/navigation://marks',
@@ -61,7 +67,7 @@ describe('mcp navigation builtin surfaces', function()
 
     it('returns a stable empty payload when no marks are set', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/navigation://marks',

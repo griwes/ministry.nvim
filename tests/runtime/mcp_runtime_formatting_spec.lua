@@ -2,7 +2,7 @@ describe('mcp formatting builtin surfaces', function()
     local original_conform
 
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
         original_conform = package.loaded['conform']
     end)
 
@@ -14,7 +14,7 @@ describe('mcp formatting builtin surfaces', function()
         package.loaded['conform'] = nil
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/formatting://summary',
@@ -35,7 +35,7 @@ describe('mcp formatting builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/formatting://summary',

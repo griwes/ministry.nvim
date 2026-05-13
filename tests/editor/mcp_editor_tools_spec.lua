@@ -26,12 +26,12 @@ end
 
 describe('mcp editor tools', function()
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
     end)
 
     it('computes and applies path-addressed edits as direct buffer modifications', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local root = temp_dir()
         local path = vim.fs.joinpath(root, 'write-file.txt')
@@ -65,7 +65,7 @@ describe('mcp editor tools', function()
 
     it('uses modified loaded buffers as the source of truth for path-addressed file tools', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local root = temp_dir()
         local path = vim.fs.joinpath(root, 'write-file-unsaved-buffer.txt')
@@ -114,7 +114,7 @@ describe('mcp editor tools', function()
 
     it('loads unloaded paths into hidden buffers for path-addressed edits', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local root = temp_dir()
         local path = vim.fs.joinpath(root, 'write-file-unloaded.txt')
@@ -141,7 +141,7 @@ describe('mcp editor tools', function()
 
     it('writes empty file content to the buffer without introducing a trailing newline', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local root = temp_dir()
         local path = vim.fs.joinpath(root, 'empty-file.txt')
@@ -167,7 +167,7 @@ describe('mcp editor tools', function()
 
     it('keeps write and apply-diff buffer tools distinct', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local bufnr = vim.api.nvim_get_current_buf()
         vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'before' })
@@ -204,7 +204,7 @@ describe('mcp editor tools', function()
 
     it('applies zero-width insertions before the addressed line', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local bufnr = vim.api.nvim_get_current_buf()
 
@@ -228,7 +228,7 @@ describe('mcp editor tools', function()
 
     it('emits zero-width insertions before the following line', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local bufnr = vim.api.nvim_get_current_buf()
         local current_lines = {
@@ -287,7 +287,7 @@ describe('mcp editor tools', function()
 
     it('keeps write/apply file tools distinct', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local root = temp_dir()
         local path = vim.fs.joinpath(root, 'write-apply-alias.txt')
@@ -339,7 +339,7 @@ describe('mcp editor tools', function()
 
     it('returns structured errors for editor diff tool invalid arguments', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local current_bufnr = vim.api.nvim_get_current_buf()
         local diff_buffer_missing_result, diff_buffer_missing_err = plugin.call_tool('neovim/editor/diff_buffer', {
@@ -388,7 +388,7 @@ describe('mcp editor tools', function()
 
     it('rejects removed current-buffer tools and apply-diff invalid arguments', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local write_current_result, write_current_err = plugin.call_tool('neovim/editor/write_current_buffer', {
             content = 'after\n',
@@ -468,7 +468,7 @@ describe('mcp editor tools', function()
 
     it('diffs a missing file against empty buffer content', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local path = vim.fs.joinpath(temp_dir(), 'missing-read.txt')
         local result, err = plugin.call_tool('neovim/editor/diff_file', {
@@ -486,7 +486,7 @@ describe('mcp editor tools', function()
 
     it('rejects editor/write_file when path or content are invalid', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local result1, err1 = plugin.call_tool('neovim/editor/write_file', {
             content = 'after\n',

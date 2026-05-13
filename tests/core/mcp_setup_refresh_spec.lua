@@ -1,10 +1,10 @@
 describe('mcp', function()
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
     end)
     it('updates the matching modified buffer for editor/write_file without forcing a save', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local root = vim.fn.tempname()
         vim.fn.mkdir(root, 'p')
@@ -113,9 +113,9 @@ describe('mcp', function()
             },
         })
 
-        plugin.setup()
-        plugin.reset()
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
+        require('tests.helpers.ministry').reset(plugin)
+        require('tests.helpers.ministry').setup(plugin)
 
         local server = plugin.list_servers()[1]
         local tool_names = vim.tbl_map(function(tool)
@@ -143,7 +143,7 @@ describe('mcp', function()
     it('drops preserved neovim customizations after explicit unregister', function()
         local plugin = require('ministry')
 
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
         plugin.register_server({
             name = 'neovim',
             title = 'Custom Neovim',
@@ -187,7 +187,7 @@ describe('mcp', function()
         })
 
         plugin.unregister_server('neovim')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local server = vim.iter(plugin.list_servers()):find(function(item)
             return item.name == 'neovim'
@@ -218,7 +218,7 @@ describe('mcp', function()
         local plugin = require('ministry')
         local http_server = require('ministry.transport.http.server')
         local ok, err = xpcall(function()
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 transport = 'http',
                 http_host = '127.0.0.1',
                 http_port = 0,
@@ -270,7 +270,7 @@ describe('mcp', function()
         end, function(message)
             return debug.traceback(message, 2)
         end)
-        plugin.reset()
+        require('tests.helpers.ministry').reset(plugin)
         if not ok then
             error(err)
         end
@@ -280,7 +280,7 @@ describe('mcp', function()
         local plugin = require('ministry')
         local http_server = require('ministry.transport.http.server')
         local ok, err = xpcall(function()
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 transport = 'http',
                 http_host = '127.0.0.1',
                 http_port = 0,
@@ -330,7 +330,7 @@ describe('mcp', function()
         end, function(message)
             return debug.traceback(message, 2)
         end)
-        plugin.reset()
+        require('tests.helpers.ministry').reset(plugin)
         if not ok then
             error(err)
         end
@@ -340,7 +340,7 @@ describe('mcp', function()
         local plugin = require('ministry')
         local http_server = require('ministry.transport.http.server')
         local ok, err = xpcall(function()
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 transport = 'http',
                 http_host = '127.0.0.1',
                 http_port = 0,
@@ -387,7 +387,7 @@ describe('mcp', function()
         end, function(message)
             return debug.traceback(message, 2)
         end)
-        plugin.reset()
+        require('tests.helpers.ministry').reset(plugin)
         if not ok then
             error(err)
         end
@@ -397,7 +397,7 @@ describe('mcp', function()
         local plugin = require('ministry')
         local http_server = require('ministry.transport.http.server')
         local ok, err = xpcall(function()
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 transport = 'http',
                 http_host = '127.0.0.1',
                 http_port = 0,
@@ -453,7 +453,7 @@ describe('mcp', function()
         end, function(message)
             return debug.traceback(message, 2)
         end)
-        plugin.reset()
+        require('tests.helpers.ministry').reset(plugin)
         if not ok then
             error(err)
         end
@@ -465,7 +465,7 @@ describe('mcp', function()
             local plugin = require('ministry')
             local http_server = require('ministry.transport.http.server')
             local ok, err = xpcall(function()
-                plugin.setup({
+                require('tests.helpers.ministry').setup(plugin, {
                     transport = 'http',
                     http_host = '127.0.0.1',
                     http_port = 0,
@@ -519,7 +519,7 @@ describe('mcp', function()
             end, function(message)
                 return debug.traceback(message, 2)
             end)
-            plugin.reset()
+            require('tests.helpers.ministry').reset(plugin)
             if not ok then
                 error(err)
             end
@@ -530,7 +530,7 @@ describe('mcp', function()
         local plugin = require('ministry')
         local http_server = require('ministry.transport.http.server')
         local ok, err = xpcall(function()
-            plugin.setup()
+            require('tests.helpers.ministry').setup(plugin)
             local start_ok, start_err = http_server.start()
             assert.is_true(start_ok)
             assert.is_nil(start_err)
@@ -574,7 +574,7 @@ describe('mcp', function()
         end, function(message)
             return debug.traceback(message, 2)
         end)
-        plugin.reset()
+        require('tests.helpers.ministry').reset(plugin)
         if not ok then
             error(err)
         end
@@ -584,7 +584,7 @@ describe('mcp', function()
         local plugin = require('ministry')
         local http_server = require('ministry.transport.http.server')
         local ok, err = xpcall(function()
-            plugin.setup()
+            require('tests.helpers.ministry').setup(plugin)
             local start_ok, start_err = http_server.start()
             assert.is_true(start_ok)
             assert.is_nil(start_err)
@@ -628,7 +628,7 @@ describe('mcp', function()
         end, function(message)
             return debug.traceback(message, 2)
         end)
-        plugin.reset()
+        require('tests.helpers.ministry').reset(plugin)
         if not ok then
             error(err)
         end
@@ -849,7 +849,7 @@ describe('mcp', function()
             },
         })
 
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local server_names = vim.tbl_map(function(server)
             return server.name
@@ -890,8 +890,8 @@ describe('mcp', function()
             },
         })
 
-        plugin.setup()
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
+        require('tests.helpers.ministry').setup(plugin)
 
         local server = vim.iter(plugin.list_servers()):find(function(item)
             return item.name == 'neovim'
@@ -906,7 +906,7 @@ describe('mcp', function()
     it('preserves explicit neovim server replacements across repeated setup calls', function()
         local plugin = require('ministry')
 
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
         plugin.register_server({
             name = 'neovim',
             title = 'Custom Neovim',
@@ -921,8 +921,8 @@ describe('mcp', function()
             },
         })
 
-        plugin.setup({ enable_terminal_tools = true })
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin)
 
         local server = vim.iter(plugin.list_servers()):find(function(item)
             return item.name == 'neovim'
@@ -940,7 +940,7 @@ describe('mcp', function()
     it('restores built-in neovim refresh after removing custom replacement tools', function()
         local plugin = require('ministry')
 
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
         plugin.register_server({
             name = 'neovim',
             title = 'Custom Neovim',
@@ -963,7 +963,7 @@ describe('mcp', function()
         })
         plugin.unregister_tool('neovim', 'custom/ping')
 
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         local server = vim.iter(plugin.list_servers()):find(function(item)
             return item.name == 'neovim'
@@ -980,7 +980,7 @@ describe('mcp', function()
     it('preserves built-in tool overrides across setup refreshes', function()
         local plugin = require('ministry')
 
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local expected = { ok = 'override' }
         plugin.register_tool('neovim', {
@@ -997,8 +997,8 @@ describe('mcp', function()
             end,
         })
 
-        plugin.setup({ enable_terminal_tools = true })
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin)
 
         local listed = plugin.call_tool('neovim/editor/list_buffers', {}, {})
         assert.are.same(expected, listed)
@@ -1018,7 +1018,7 @@ describe('mcp', function()
     it('retains built-in tool overrides when only the input schema changes', function()
         local plugin = require('ministry')
 
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local builtin = vim.iter(plugin.list_tool_descriptors()):find(function(item)
             return item.namespaced_name == 'neovim/editor/list_buffers'
@@ -1041,8 +1041,8 @@ describe('mcp', function()
             handler = builtin_tool.handler,
         })
 
-        plugin.setup({ enable_terminal_tools = true })
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin)
 
         local descriptor = vim.iter(plugin.list_tool_descriptors()):find(function(item)
             return item.namespaced_name == 'neovim/editor/list_buffers'
@@ -1057,7 +1057,7 @@ describe('mcp', function()
     it('does not retain equivalent built-in tool specs as overrides', function()
         local plugin = require('ministry')
 
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local builtin = vim.iter(plugin.list_tool_descriptors()):find(function(item)
             return item.namespaced_name == 'neovim/editor/list_buffers'
@@ -1076,8 +1076,8 @@ describe('mcp', function()
             handler = builtin_tool.handler,
         })
 
-        plugin.setup({ enable_terminal_tools = true })
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin)
 
         local descriptor = vim.iter(plugin.list_tool_descriptors()):find(function(item)
             return item.namespaced_name == 'neovim/editor/list_buffers'
@@ -1096,7 +1096,7 @@ describe('mcp', function()
             end,
         })
 
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local initial_tool_names = vim.tbl_map(function(tool)
             return tool.namespaced_name
@@ -1104,7 +1104,7 @@ describe('mcp', function()
 
         assert.is_false(vim.tbl_contains(initial_tool_names, 'neovim/terminal/create'))
 
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         local enabled_tool_names = vim.tbl_map(function(tool)
             return tool.namespaced_name
@@ -1113,7 +1113,7 @@ describe('mcp', function()
         assert.is_true(vim.tbl_contains(enabled_tool_names, 'neovim/custom/ping'))
         assert.is_true(vim.tbl_contains(enabled_tool_names, 'neovim/terminal/create'))
 
-        plugin.setup({ enable_terminal_tools = false })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = false })
 
         local disabled_tool_names = vim.tbl_map(function(tool)
             return tool.namespaced_name
@@ -1127,7 +1127,7 @@ end)
 it('re-registers built-in neovim server after reset and setup', function()
     local plugin = require('ministry')
 
-    plugin.setup({ enable_terminal_tools = true })
+    require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
     plugin.register_server({
         name = 'neovim',
         tools = {
@@ -1141,8 +1141,8 @@ it('re-registers built-in neovim server after reset and setup', function()
         },
     })
 
-    plugin.reset()
-    plugin.setup({ enable_terminal_tools = true })
+    require('tests.helpers.ministry').reset(plugin)
+    require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
     local tool_names = vim.tbl_map(function(tool)
         return tool.namespaced_name
@@ -1157,7 +1157,7 @@ it('does not start HTTP from start_all when HTTP remains on the default ephemera
     local plugin = require('ministry')
     local http_server = require('ministry.transport.http.server')
 
-    plugin.setup({
+    require('tests.helpers.ministry').setup(plugin, {
         transport = 'socket',
         http_host = '127.0.0.1',
         http_port = 0,
@@ -1171,14 +1171,14 @@ it('does not start HTTP from start_all when HTTP remains on the default ephemera
     assert.is_nil(host)
     assert.is_nil(port)
 
-    plugin.reset()
+    require('tests.helpers.ministry').reset(plugin)
 end)
 
 it('starts HTTP from start_all when an explicit HTTP port is configured', function()
     local plugin = require('ministry')
     local http_server = require('ministry.transport.http.server')
 
-    plugin.setup({
+    require('tests.helpers.ministry').setup(plugin, {
         transport = 'socket',
         http_host = '127.0.0.1',
         http_port = 8126,
@@ -1192,7 +1192,7 @@ it('starts HTTP from start_all when an explicit HTTP port is configured', functi
     assert.are.equal('127.0.0.1', host)
     assert.are.equal(8126, port)
 
-    plugin.reset()
+    require('tests.helpers.ministry').reset(plugin)
 end)
 
 it('starts socket and HTTP from start when HTTP transport is requested and sockets are supported', function()
@@ -1241,7 +1241,7 @@ it('reuses an existing HTTP listener for repeated ephemeral-port starts', functi
     local plugin = require('ministry')
     local http_server = require('ministry.transport.http.server')
 
-    plugin.setup({
+    require('tests.helpers.ministry').setup(plugin, {
         transport = 'http',
         http_host = '127.0.0.1',
         http_port = 0,
@@ -1271,7 +1271,7 @@ it('restarts the HTTP listener only when the configured endpoint changes', funct
     local http_server = require('ministry.transport.http.server')
 
     local function started_endpoint(host, port)
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = 'http',
             http_host = host,
             http_port = port,
@@ -1289,7 +1289,7 @@ it('restarts the HTTP listener only when the configured endpoint changes', funct
 
     local first_host, first_port = started_endpoint('127.0.0.1', 8123)
 
-    plugin.setup({
+    require('tests.helpers.ministry').setup(plugin, {
         transport = 'http',
         http_host = '127.0.0.1',
         http_port = 8123,
@@ -1302,7 +1302,7 @@ it('restarts the HTTP listener only when the configured endpoint changes', funct
     assert.are.equal(first_host, same_host)
     assert.are.equal(first_port, same_port)
 
-    plugin.setup({
+    require('tests.helpers.ministry').setup(plugin, {
         transport = 'http',
         http_host = '127.0.0.1',
         http_port = 8124,
@@ -1316,11 +1316,11 @@ it('restarts the HTTP listener only when the configured endpoint changes', funct
     assert.are.equal(8124, changed_port)
     assert.are_not.equal(first_port, changed_port)
 
-    plugin.reset()
+    require('tests.helpers.ministry').reset(plugin)
 
     started_endpoint('127.0.0.1', 8125)
 
-    plugin.setup({
+    require('tests.helpers.ministry').setup(plugin, {
         transport = 'http',
         http_host = '127.0.0.2',
         http_port = 8125,
@@ -1333,7 +1333,7 @@ it('restarts the HTTP listener only when the configured endpoint changes', funct
     assert.are.equal('127.0.0.2', changed_host)
     assert.are.equal(8125, changed_port)
 
-    plugin.reset()
+    require('tests.helpers.ministry').reset(plugin)
 end)
 
 it('closes the accepted startup probe client immediately', function()
@@ -1465,7 +1465,7 @@ it('restarts a pending ephemeral HTTP listener when the configured host changes'
     end
 
     local ok, err = xpcall(function()
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = 'http',
             http_host = '127.0.0.1',
             http_port = 0,
@@ -1475,7 +1475,7 @@ it('restarts a pending ephemeral HTTP listener when the configured host changes'
         assert.is_true(started)
         assert.is_nil(start_err)
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = 'http',
             http_host = '127.0.0.2',
             http_port = 0,
@@ -1494,7 +1494,7 @@ it('restarts a pending ephemeral HTTP listener when the configured host changes'
 
     vim.uv.new_tcp = original_new_tcp
     vim.in_fast_event = original_in_fast_event
-    plugin.reset()
+    require('tests.helpers.ministry').reset(plugin)
 
     if not ok then
         error(err)
@@ -1648,7 +1648,7 @@ it('restarts a pending HTTP listener when the endpoint changes', function()
         }
     end
 
-    plugin.setup({
+    require('tests.helpers.ministry').setup(plugin, {
         transport = 'http',
         http_host = '127.0.0.1',
         http_port = 9876,
@@ -1658,7 +1658,7 @@ it('restarts a pending HTTP listener when the endpoint changes', function()
     assert.is_true(ok)
     assert.is_nil(err)
 
-    plugin.setup({
+    require('tests.helpers.ministry').setup(plugin, {
         transport = 'http',
         http_host = '127.0.0.1',
         http_port = 9877,
@@ -1958,7 +1958,7 @@ it('rebuilds built-in neovim server from fresh defaults across setup calls', fun
         },
     })
 
-    plugin.setup()
+    require('tests.helpers.ministry').setup(plugin)
 
     plugin.register_server({
         name = 'neovim',
@@ -1974,7 +1974,7 @@ it('rebuilds built-in neovim server from fresh defaults across setup calls', fun
         },
     })
 
-    plugin.setup({ enable_terminal_tools = true })
+    require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
     local server = vim.iter(plugin.list_servers()):find(function(item)
         return item.name == 'neovim'

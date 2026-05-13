@@ -2,7 +2,10 @@ local function read_json_resource(plugin, uri, request_id)
     local response = plugin.handle_request('resources/read', {
         uri = uri,
     }, request_id, {})
-    assert(response and response.result and response.result.contents and response.result.contents[1], 'missing resource response')
+    assert(
+        response and response.result and response.result.contents and response.result.contents[1],
+        'missing resource response'
+    )
     return vim.json.decode(response.result.contents[1].text)
 end
 
@@ -19,7 +22,7 @@ describe('mcp mason real-plugin integration', function()
         mason.setup({})
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local payload = read_json_resource(plugin, 'neovim/mason://inventory', 1)
         assert.is_true(type(payload.available) == 'boolean')

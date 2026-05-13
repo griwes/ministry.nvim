@@ -2,7 +2,7 @@ describe('mcp dap builtin surfaces', function()
     local original_dap
 
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
         original_dap = package.loaded['dap']
     end)
 
@@ -138,7 +138,7 @@ describe('mcp dap builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local summary = plugin.handle_request('resources/read', {
             uri = 'neovim/dap://summary',

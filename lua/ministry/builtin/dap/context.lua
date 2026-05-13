@@ -179,10 +179,11 @@ end
 
 local function request(session, command, arguments)
     if type(session) ~= 'table' or type(session.request) ~= 'function' then
-        return nil, {
-            code = -32000,
-            message = 'No active dap.nvim session is available',
-        }
+        return nil,
+            {
+                code = -32000,
+                message = 'No active dap.nvim session is available',
+            }
     end
 
     local done = false
@@ -200,10 +201,11 @@ local function request(session, command, arguments)
     end, 10)
 
     if not done then
-        return nil, {
-            code = -32000,
-            message = string.format('dap.nvim request timed out: %s', command),
-        }
+        return nil,
+            {
+                code = -32000,
+                message = string.format('dap.nvim request timed out: %s', command),
+            }
     end
 
     if response_err ~= nil then
@@ -219,10 +221,11 @@ end
 local function require_session()
     local session = current_session()
     if session == nil then
-        return nil, {
-            code = -32000,
-            message = 'No active dap.nvim session is available',
-        }
+        return nil,
+            {
+                code = -32000,
+                message = 'No active dap.nvim session is available',
+            }
     end
 
     return session, nil
@@ -326,10 +329,11 @@ function M.stack(thread_id)
 
     local resolved_thread_id = thread_id or current_thread_id(session)
     if type(resolved_thread_id) ~= 'number' then
-        return nil, {
-            code = -32602,
-            message = 'Invalid arguments: thread_id must be an integer',
-        }
+        return nil,
+            {
+                code = -32602,
+                message = 'Invalid arguments: thread_id must be an integer',
+            }
     end
 
     local body, request_err = request(session, 'stackTrace', {
@@ -351,7 +355,8 @@ function M.stack(thread_id)
         thread_id = resolved_thread_id,
         total_frames = body.totalFrames,
         stack_frames = items,
-    }, nil
+    },
+        nil
 end
 
 function M.scopes(frame_id)
@@ -361,10 +366,11 @@ function M.scopes(frame_id)
     end
 
     if type(frame_id) ~= 'number' then
-        return nil, {
-            code = -32602,
-            message = 'Invalid arguments: frame_id must be an integer',
-        }
+        return nil,
+            {
+                code = -32602,
+                message = 'Invalid arguments: frame_id must be an integer',
+            }
     end
 
     local body, request_err = request(session, 'scopes', {
@@ -395,10 +401,11 @@ function M.variables(variables_reference)
     end
 
     if type(variables_reference) ~= 'number' then
-        return nil, {
-            code = -32602,
-            message = 'Invalid arguments: variables_reference must be an integer',
-        }
+        return nil,
+            {
+                code = -32602,
+                message = 'Invalid arguments: variables_reference must be an integer',
+            }
     end
 
     local body, request_err = request(session, 'variables', {
@@ -425,18 +432,20 @@ end
 local function invoke_action(name)
     local session, dap = current_session()
     if session == nil or dap == nil then
-        return nil, {
-            code = -32000,
-            message = 'No active dap.nvim session is available',
-        }
+        return nil,
+            {
+                code = -32000,
+                message = 'No active dap.nvim session is available',
+            }
     end
 
     local action = dap[name]
     if type(action) ~= 'function' then
-        return nil, {
-            code = -32000,
-            message = string.format('dap.nvim action is unavailable: %s', name),
-        }
+        return nil,
+            {
+                code = -32000,
+                message = string.format('dap.nvim action is unavailable: %s', name),
+            }
     end
 
     action()

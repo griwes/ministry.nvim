@@ -1,6 +1,6 @@
 describe('mcp', function()
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
     end)
 
     it('loads and exposes setup', function()
@@ -278,7 +278,7 @@ describe('mcp', function()
 
     it('describes a Unix-socket bridge endpoint', function()
         local plugin = require('ministry')
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             socket_prefix = 'custom_mcp',
             bridge_command = 'socat',
         })
@@ -286,10 +286,11 @@ describe('mcp', function()
         local endpoint = plugin.endpoint()
 
         assert.are.equal('socket', endpoint.transport)
-        assert.are.equal('abstract', endpoint.socket_kind)
-        assert.is_true(vim.startswith(endpoint.socket_name, 'custom_mcp_'))
+        assert.are.equal('filesystem', endpoint.socket_kind)
+        assert.is_true(vim.startswith(vim.fs.basename(endpoint.socket_name), 'custom_mcp_'))
+        assert.are.equal('ministry.nvim', vim.fs.basename(vim.fs.dirname(endpoint.socket_name)))
         assert.are.equal('socat', endpoint.command)
-        assert.are.same({ '-', 'ABSTRACT-CONNECT:' .. endpoint.socket_name }, endpoint.args)
+        assert.are.same({ '-', 'UNIX-CONNECT:' .. endpoint.socket_name }, endpoint.args)
     end)
 
     it('dispatches namespaced tool calls through the unified registry', function()
@@ -631,7 +632,7 @@ describe('mcp', function()
     it('reads the built-in workspace summary resource as structured json', function()
         local plugin = require('ministry')
 
-        plugin.setup({})
+        require('tests.helpers.ministry').setup(plugin, {})
         vim.cmd('enew')
         vim.bo.filetype = 'lua'
         vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'print("hi")' })
@@ -663,7 +664,7 @@ describe('mcp', function()
 
         vim.fn.mkdir(cwd, 'p')
 
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         local created, created_err = plugin.call_tool('neovim/terminal/create', {
             command = { 'printf', 'hello' },
@@ -693,7 +694,7 @@ describe('mcp', function()
     it('lets a listed Ministry-owned terminal be released by its listed id', function()
         local plugin = require('ministry')
 
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         local created, created_err = plugin.call_tool('neovim/terminal/create', {
             command = { 'sleep', '5' },
@@ -723,7 +724,7 @@ describe('mcp', function()
     it('captures fresh freeform terminal-list data through list-provider callbacks', function()
         local plugin = require('ministry')
 
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         local created, created_err = plugin.call_tool('neovim/terminal/create', {
             command = { 'printf', 'hello' },
@@ -771,7 +772,7 @@ describe('mcp', function()
     it('captures fresh freeform buffer-list data through list-provider callbacks', function()
         local plugin = require('ministry')
 
-        plugin.setup({})
+        require('tests.helpers.ministry').setup(plugin, {})
         vim.cmd('enew')
         vim.bo.filetype = 'lua'
 
@@ -823,7 +824,7 @@ describe('mcp', function()
     it('does not attach Terminalia context metadata unless it is explicitly provided', function()
         local plugin = require('ministry')
 
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         local created, created_err = plugin.call_tool('neovim/terminal/create', {
             command = { 'printf', 'hello' },
@@ -854,7 +855,7 @@ describe('mcp', function()
 
         vim.fn.mkdir(global_dir, 'p')
         vim.fn.mkdir(local_dir, 'p')
-        plugin.setup({})
+        require('tests.helpers.ministry').setup(plugin, {})
         vim.cmd('cd ' .. vim.fn.fnameescape(global_dir))
         vim.cmd('lcd ' .. vim.fn.fnameescape(local_dir))
 
@@ -1552,7 +1553,7 @@ describe('mcp', function()
     it('accepts the exact split payload shape over the advertised socat bridge', function()
         local plugin = require('ministry')
 
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         local ok, err = plugin.start_all()
         assert.is_true(ok)
@@ -1573,7 +1574,7 @@ describe('mcp', function()
         })
 
         local shell_script =
-            string.format("cat <<'EOF' | socat - ABSTRACT-CONNECT:%s\n%s\nEOF", endpoint.socket_name, payload)
+            string.format("cat <<'EOF' | socat - UNIX-CONNECT:%s\n%s\nEOF", endpoint.socket_name, payload)
         local result
         vim.system({ 'sh', '-lc', shell_script }, {
             text = true,
@@ -1627,6 +1628,36 @@ describe('mcp', function()
                 text = vim.json.encode({
                     echoed = { 'printf', 'hello' },
                 }),
+            },
+        }, call.result.content)
+    end)
+
+    it('accepts consistent qualified and split tool identifiers', function()
+        local plugin = require('ministry')
+
+        plugin.register_server({
+            name = 'alpha',
+            tools = {
+                x = {
+                    handler = function()
+                        return { ok = true }
+                    end,
+                },
+            },
+        })
+
+        local call = plugin.handle_request('tools/call', {
+            name = 'alpha/x',
+            server = 'alpha',
+            tool = 'x',
+            arguments = {},
+        }, 7, {})
+
+        assert.is_nil(call.error)
+        assert.are.same({
+            {
+                type = 'text',
+                text = vim.json.encode({ ok = true }),
             },
         }, call.result.content)
     end)

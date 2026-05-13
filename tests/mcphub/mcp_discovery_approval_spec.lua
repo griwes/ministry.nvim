@@ -1,12 +1,16 @@
 describe('mcp discovery and approvals', function()
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
         require('ministry.external.http')._reset_request_impl()
     end)
 
     local function write_json(path, value)
         vim.fn.mkdir(vim.fs.dirname(path), 'p')
         vim.fn.writefile({ vim.json.encode(value) }, path)
+    end
+
+    local function read_json(path)
+        return vim.json.decode(table.concat(vim.fn.readfile(path), '\n'))
     end
 
     local function mkdtemp(prefix)
@@ -83,7 +87,7 @@ describe('mcp discovery and approvals', function()
             },
         })
 
-        require('ministry').setup({
+        require('tests.helpers.ministry').setup(require('ministry'), {
             auto_start = false,
             external = {
                 enabled = false,
@@ -132,7 +136,7 @@ describe('mcp discovery and approvals', function()
             },
         })
 
-        require('ministry').setup({
+        require('tests.helpers.ministry').setup(require('ministry'), {
             auto_start = false,
             external = {
                 enabled = false,
@@ -245,7 +249,7 @@ describe('mcp discovery and approvals', function()
         end)
 
         local plugin = require('ministry')
-        plugin.setup({ auto_start = false })
+        require('tests.helpers.ministry').setup(plugin, { auto_start = false })
 
         local runtimes, errors = require('ministry.external.manager').refresh({
             specs = {
@@ -413,7 +417,7 @@ describe('mcp discovery and approvals', function()
             assert.is_not_nil(port)
 
             local plugin = require('ministry')
-            plugin.setup({ auto_start = false })
+            require('tests.helpers.ministry').setup(plugin, { auto_start = false })
             local runtimes, errors = require('ministry.external.manager').refresh({
                 specs = {
                     {
@@ -498,7 +502,7 @@ describe('mcp discovery and approvals', function()
         vim.env.PATH = root .. ':' .. old_path
 
         local ok, err = xpcall(function()
-            require('ministry').setup({ auto_start = false })
+            require('tests.helpers.ministry').setup(require('ministry'), { auto_start = false })
             local runtimes, errors = require('ministry.external.manager').refresh({
                 specs = {
                     {
@@ -576,7 +580,7 @@ describe('mcp discovery and approvals', function()
         end)
 
         local plugin = require('ministry')
-        plugin.setup({ auto_start = false })
+        require('tests.helpers.ministry').setup(plugin, { auto_start = false })
         local spec = {
             name = 'remote',
             transport = 'http',
@@ -622,7 +626,7 @@ describe('mcp discovery and approvals', function()
         end)
 
         local plugin = require('ministry')
-        plugin.setup({ auto_start = false })
+        require('tests.helpers.ministry').setup(plugin, { auto_start = false })
         local spec = {
             name = 'remote',
             transport = 'http',
@@ -670,7 +674,7 @@ describe('mcp discovery and approvals', function()
         }, server_path)
 
         local plugin = require('ministry')
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             auto_start = false,
             external = {
                 request_timeout_ms = 5000,
@@ -708,7 +712,7 @@ describe('mcp discovery and approvals', function()
         write_stdio_launcher(launcher_path, server_path)
 
         local plugin = require('ministry')
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             auto_start = false,
             external = {
                 request_timeout_ms = 5000,
@@ -747,7 +751,7 @@ describe('mcp discovery and approvals', function()
         write_stdio_launcher(launcher_path, server_path)
 
         local plugin = require('ministry')
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             auto_start = false,
             external = {
                 request_timeout_ms = 5000,
@@ -810,7 +814,7 @@ describe('mcp discovery and approvals', function()
             source = { kind = 'config', name = 'mcpServers', path = server_path },
         }
         local plugin = require('ministry')
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             auto_start = false,
             external = {
                 request_timeout_ms = 5000,
@@ -849,7 +853,7 @@ describe('mcp discovery and approvals', function()
         }, server_path)
 
         local plugin = require('ministry')
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             auto_start = false,
             external = {
                 request_timeout_ms = 5000,
@@ -886,7 +890,7 @@ describe('mcp discovery and approvals', function()
 
     it('surfaces missing stdio commands before activation spawn attempts', function()
         local plugin = require('ministry')
-        plugin.setup({ auto_start = false })
+        require('tests.helpers.ministry').setup(plugin, { auto_start = false })
         plugin.set_approval('missing', '__activate', 'allow')
 
         local runtimes, errors = require('ministry.external.manager').refresh({
@@ -923,7 +927,7 @@ describe('mcp discovery and approvals', function()
             },
         })
 
-        require('ministry').setup({
+        require('tests.helpers.ministry').setup(require('ministry'), {
             auto_start = false,
             external = {
                 enabled = true,
@@ -954,7 +958,7 @@ describe('mcp discovery and approvals', function()
         vim.fn.mkdir(root, 'p')
 
         local plugin = require('ministry')
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             auto_start = false,
             approval = {
                 enabled = false,
@@ -988,7 +992,7 @@ describe('mcp discovery and approvals', function()
         local plugin = require('ministry')
         local executed = false
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             auto_start = false,
             approval = {
                 enabled = true,
@@ -1011,13 +1015,21 @@ describe('mcp discovery and approvals', function()
 
         plugin.set_approval('editor', 'echo', 'reject')
 
+        local index = read_json(policy_path)
+        local server_policy = read_json(vim.fs.joinpath(string.format('%s.d', policy_path), 'servers', 'editor.json'))
+
+        assert.are.equal(1, index.version)
+        assert.are.equal('editor.json', index.servers[1].file)
+        assert.is_nil(index.servers[1].tools)
+        assert.are.equal('reject', server_policy.tools.echo)
+
         local result, err = plugin.call_tool('editor/echo', {}, {})
         assert.is_nil(result)
         assert.are.equal(-32001, err.code)
         assert.is_false(executed)
 
-        plugin.reset()
-        plugin.setup({
+        require('tests.helpers.ministry').reset(plugin)
+        require('tests.helpers.ministry').setup(plugin, {
             auto_start = false,
             approval = {
                 enabled = true,
@@ -1051,7 +1063,7 @@ describe('mcp discovery and approvals', function()
         end
 
         local ok, err = xpcall(function()
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 auto_start = false,
                 approval = {
                     enabled = true,
@@ -1103,7 +1115,7 @@ describe('mcp discovery and approvals', function()
         end
 
         local ok, err = xpcall(function()
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 auto_start = false,
                 approval = {
                     enabled = true,
@@ -1155,7 +1167,7 @@ describe('mcp discovery and approvals', function()
         end
 
         local ok, err = xpcall(function()
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 auto_start = false,
                 approval = {
                     enabled = true,
@@ -1232,7 +1244,7 @@ describe('mcp discovery and approvals', function()
         end
 
         local ok, err = xpcall(function()
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 auto_start = false,
                 approval = {
                     enabled = true,
@@ -1296,7 +1308,7 @@ describe('mcp discovery and approvals', function()
         end
 
         local ok, err = xpcall(function()
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 auto_start = false,
                 approval = {
                     enabled = true,
@@ -1337,7 +1349,7 @@ describe('mcp discovery and approvals', function()
 
     it('summarizes native and external server state for the inspection UI', function()
         local plugin = require('ministry')
-        plugin.setup({ auto_start = false })
+        require('tests.helpers.ministry').setup(plugin, { auto_start = false })
         plugin.set_approval('neovim', nil, 'ask')
         plugin.set_approval('remote', 'echo', 'allow')
         require('ministry.external.manager').configure({
@@ -1464,7 +1476,7 @@ describe('mcp discovery and approvals', function()
 
     it('updates method approvals from the inspection UI keymaps', function()
         local plugin = require('ministry')
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             auto_start = false,
             approval = {
                 enabled = true,

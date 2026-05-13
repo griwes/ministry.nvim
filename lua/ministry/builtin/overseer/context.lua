@@ -31,7 +31,8 @@ local function normalize_task(task)
     local cwd = type(task.cwd) == 'string' and vim.fs.normalize(task.cwd) or nil
     local strategy = type(task.strategy) == 'string' and task.strategy or nil
     local running = type(task.is_running) == 'function' and task:is_running() or status == 'RUNNING'
-    local complete = type(task.is_complete) == 'function' and task:is_complete() or (status ~= 'PENDING' and status ~= 'RUNNING')
+    local complete = type(task.is_complete) == 'function' and task:is_complete()
+        or (status ~= 'PENDING' and status ~= 'RUNNING')
 
     return {
         id = id,

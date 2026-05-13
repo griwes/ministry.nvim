@@ -3,7 +3,7 @@ describe('mcp git builtin surfaces', function()
     local temp_path
 
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
         original_stratum = package.loaded['stratum']
         temp_path = vim.fs.normalize(vim.fn.tempname() .. '.lua')
         vim.fn.writefile({ 'return true' }, temp_path)
@@ -20,7 +20,7 @@ describe('mcp git builtin surfaces', function()
         package.loaded['stratum'] = nil
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/git://repository',
@@ -98,7 +98,7 @@ describe('mcp git builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/git://repository',
@@ -215,7 +215,7 @@ describe('mcp git builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/git://overview',
@@ -311,7 +311,7 @@ describe('mcp git builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('tools/call', {
             name = 'neovim/git/overview',
@@ -336,7 +336,7 @@ describe('mcp git builtin surfaces', function()
 
     it('rejects invalid Git overview tool arguments', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('tools/call', {
             name = 'neovim/git/overview',
@@ -440,7 +440,7 @@ describe('mcp git builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/git://refs',
@@ -549,7 +549,7 @@ describe('mcp git builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('tools/call', {
             name = 'neovim/git/list_refs',
@@ -579,7 +579,7 @@ describe('mcp git builtin surfaces', function()
 
     it('rejects invalid Git list refs tool arguments', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local path_response = plugin.handle_request('tools/call', {
             name = 'neovim/git/list_refs',
@@ -639,7 +639,7 @@ describe('mcp git builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/git://paths',
@@ -710,7 +710,7 @@ describe('mcp git builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('tools/call', {
             name = 'neovim/git/list_paths',
@@ -734,7 +734,7 @@ describe('mcp git builtin surfaces', function()
 
     it('rejects invalid Git list paths tool arguments', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local path_response = plugin.handle_request('tools/call', {
             name = 'neovim/git/list_paths',
@@ -807,7 +807,7 @@ describe('mcp git builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/git://path',
@@ -866,7 +866,7 @@ describe('mcp git builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('tools/call', {
             name = 'neovim/git/path_state',
@@ -887,7 +887,7 @@ describe('mcp git builtin surfaces', function()
 
     it('rejects invalid Git path state tool arguments', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('tools/call', {
             name = 'neovim/git/path_state',
@@ -911,7 +911,7 @@ describe('mcp git builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/git://repository',
@@ -930,7 +930,7 @@ describe('mcp git builtin surfaces', function()
         }
 
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local response = plugin.handle_request('resources/read', {
             uri = 'neovim/git://repository',

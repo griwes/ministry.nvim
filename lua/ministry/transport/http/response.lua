@@ -8,8 +8,11 @@ local reason_phrases = {
     [404] = 'Not Found',
     [405] = 'Method Not Allowed',
     [406] = 'Not Acceptable',
+    [408] = 'Request Timeout',
+    [413] = 'Content Too Large',
     [415] = 'Unsupported Media Type',
     [422] = 'Unprocessable Entity',
+    [431] = 'Request Header Fields Too Large',
     [500] = 'Internal Server Error',
     [505] = 'HTTP Version Not Supported',
 }

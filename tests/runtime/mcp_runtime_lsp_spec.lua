@@ -6,7 +6,7 @@ describe('mcp lsp builtin surfaces', function()
     local original_diagnostic_get
 
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
         original_get_clients = vim.lsp.get_clients
         original_get_client_by_id = vim.lsp.get_client_by_id
         original_buf_request_sync = vim.lsp.buf_request_sync
@@ -24,7 +24,7 @@ describe('mcp lsp builtin surfaces', function()
 
     it('returns a lightweight lsp summary resource', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local bufnr = vim.api.nvim_get_current_buf()
         local path = vim.fn.tempname() .. '.lua'
@@ -80,7 +80,7 @@ describe('mcp lsp builtin surfaces', function()
         'returns diagnostics, actions, symbols, rename edits, workspace symbols, and locations through lsp tools',
         function()
             local plugin = require('ministry')
-            plugin.setup()
+            require('tests.helpers.ministry').setup(plugin)
 
             local bufnr = vim.api.nvim_get_current_buf()
             local path = vim.fn.tempname() .. '.lua'
@@ -436,7 +436,7 @@ describe('mcp lsp builtin surfaces', function()
 
     it('rejects lsp tool buffer arguments when the buffer id is invalid', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local result, err = plugin.call_tool('neovim/lsp/document_symbols', {
             bufnr = 999999,
@@ -449,7 +449,7 @@ describe('mcp lsp builtin surfaces', function()
 
     it('rejects negative lsp positions before forwarding requests', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local bufnr = vim.api.nvim_get_current_buf()
         local path = vim.fn.tempname() .. '.lua'
@@ -472,7 +472,7 @@ describe('mcp lsp builtin surfaces', function()
 
     it('rejects negative lsp range end positions before forwarding code-action requests', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local bufnr = vim.api.nvim_get_current_buf()
         local path = vim.fn.tempname() .. '.lua'
@@ -507,7 +507,7 @@ describe('mcp lsp builtin surfaces', function()
 
     it('surfaces top-level request timeout errors on lsp tools', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local bufnr = vim.api.nvim_get_current_buf()
         local path = vim.fn.tempname() .. '.lua'

@@ -1,5 +1,29 @@
 local M = {}
 
+---@param host string?
+---@return boolean
+function M.is_loopback_host(host)
+    if type(host) ~= 'string' then
+        return false
+    end
+
+    local normalized = vim.trim(host):lower()
+    if normalized:sub(1, 1) == '[' and normalized:sub(-1) == ']' then
+        normalized = normalized:sub(2, -2)
+    end
+
+    if normalized == 'localhost' or normalized == 'localhost.' or normalized == '::1' then
+        return true
+    end
+
+    if normalized == '0:0:0:0:0:0:0:1' then
+        return true
+    end
+
+    local first_octet = normalized:match('^(%d+)%.%d+%.%d+%.%d+$')
+    return tonumber(first_octet) == 127
+end
+
 ---@param left any
 ---@param right any
 ---@return boolean

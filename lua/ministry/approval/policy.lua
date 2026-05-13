@@ -1,6 +1,7 @@
 local config = require('ministry.core.config')
 
 local M = {}
+local CURRENT_VERSION = 1
 
 ---@class ministry.ApprovalStore
 ---@field servers table<string, { default?: ministry.ApprovalDecision, tools?: table<string, ministry.ApprovalDecision> }>
@@ -16,12 +17,20 @@ local store = {
 ---@field namespaced_name string
 ---@field arguments table
 ---@field tool_call_id? string
+---@field logical_session_id? string
+---@field transport_session_id? string
+---@field expires_at_ms number
 
 ---@type ministry.PendingApproval[]
 local pending_approvals = {}
 
 ---@type string?
 local loaded_path = nil
+
+---@return number
+local function now_ms()
+    return vim.uv.hrtime() / 1000000
+end
 
 ---@param decision any
 ---@return boolean
@@ -37,6 +46,26 @@ end
 ---@return string
 local function policy_path()
     return config.get().approval.path or default_path()
+end
+
+---@param path string
+---@return string
+local function policy_dir(path)
+    return string.format('%s.d', path)
+end
+
+---@param value string
+---@return string
+local function encode_path_component(value)
+    return value:gsub('[^%w._-]', function(char)
+        return string.format('%%%02X', char:byte())
+    end)
+end
+
+---@param server string
+---@return string
+local function server_filename(server)
+    return string.format('%s.json', encode_path_component(server))
 end
 
 ---@param path string
@@ -83,6 +112,72 @@ local function normalize_store(value)
     return normalized
 end
 
+---@param path string
+---@return table?, string?
+local function read_json(path)
+    local text = vim.fn.filereadable(path) == 1 and table.concat(vim.fn.readfile(path), '\n') or nil
+    if text == nil or text == '' then
+        return nil, nil
+    end
+
+    local ok, decoded = pcall(vim.json.decode, text)
+    if not ok then
+        return nil, tostring(decoded)
+    end
+
+    return type(decoded) == 'table' and decoded or nil, nil
+end
+
+---@param path string
+---@param payload table
+local function write_json(path, payload)
+    ensure_parent(path)
+    vim.fn.writefile(vim.split(vim.json.encode(payload), '\n', { plain = true }), path)
+end
+
+---@param index table
+---@param path string
+---@return ministry.ApprovalStore
+local function load_fragmented(index, path)
+    local normalized = {
+        servers = {},
+    }
+
+    if type(index.servers) ~= 'table' then
+        return normalized
+    end
+
+    local root = policy_dir(path)
+    for _, entry in ipairs(index.servers) do
+        if type(entry) == 'table' and type(entry.name) == 'string' then
+            local filename = type(entry.file) == 'string' and entry.file or server_filename(entry.name)
+            local rules = read_json(vim.fs.joinpath(root, 'servers', filename))
+            if type(rules) == 'table' then
+                normalized.servers[entry.name] = normalize_store({
+                    servers = {
+                        [entry.name] = rules,
+                    },
+                }).servers[entry.name]
+            end
+        end
+    end
+
+    return normalized
+end
+
+---@param server string
+---@param rules table
+---@return table
+local function server_index_entry(server, rules)
+    local tools = type(rules.tools) == 'table' and rules.tools or {}
+    return {
+        name = server,
+        default = rules.default,
+        tool_count = vim.tbl_count(tools),
+        file = server_filename(server),
+    }
+end
+
 function M.load()
     local applied = config.get()
     loaded_path = policy_path()
@@ -95,18 +190,19 @@ function M.load()
     end
 
     local path = loaded_path
-    local text = vim.fn.filereadable(path) == 1 and table.concat(vim.fn.readfile(path), '\n') or nil
-    if text == nil or text == '' then
+    local decoded, err = read_json(path)
+    if decoded == nil and err == nil then
         return
     end
 
-    local ok, decoded = pcall(vim.json.decode, text)
-    if not ok then
-        vim.notify(string.format('Ministry approval policy %s is invalid JSON: %s', path, decoded), vim.log.levels.WARN)
+    if err ~= nil then
+        vim.notify(string.format('Ministry approval policy %s is invalid JSON: %s', path, err), vim.log.levels.WARN)
         return
     end
 
-    store = normalize_store(decoded)
+    if decoded.version == CURRENT_VERSION then
+        store = load_fragmented(decoded, path)
+    end
 end
 
 function M.save()
@@ -115,8 +211,22 @@ function M.save()
     end
 
     local path = loaded_path or policy_path()
-    ensure_parent(path)
-    vim.fn.writefile(vim.split(vim.json.encode(store), '\n', { plain = true }), path)
+    local root = policy_dir(path)
+    local index = {
+        version = CURRENT_VERSION,
+        servers = {},
+    }
+
+    for server, rules in pairs(store.servers) do
+        write_json(vim.fs.joinpath(root, 'servers', server_filename(server)), rules)
+        table.insert(index.servers, server_index_entry(server, rules))
+    end
+
+    table.sort(index.servers, function(left, right)
+        return left.name < right.name
+    end)
+
+    write_json(path, index)
 end
 
 ---@param server string
@@ -200,6 +310,22 @@ local function approval_tool_call_id(request)
 end
 
 ---@param request ministry.ApprovalRequest
+---@return string?
+local function approval_transport_session_id(request)
+    local context = type(request.context) == 'table' and request.context or {}
+    local session_id = context.transport_session_id
+    return type(session_id) == 'string' and session_id ~= '' and session_id or nil
+end
+
+---@param request ministry.ApprovalRequest
+---@return string?
+local function approval_logical_session_id(request)
+    local context = type(request.context) == 'table' and request.context or {}
+    local session_id = context.legate_session_id or context.session_id
+    return type(session_id) == 'string' and session_id ~= '' and session_id or nil
+end
+
+---@param request ministry.ApprovalRequest
 ---@return ministry.PendingApproval
 local function approval_entry(request)
     return {
@@ -208,6 +334,9 @@ local function approval_entry(request)
         namespaced_name = request.namespaced_name,
         arguments = vim.deepcopy(request.arguments or {}),
         tool_call_id = approval_tool_call_id(request),
+        logical_session_id = approval_logical_session_id(request),
+        transport_session_id = approval_transport_session_id(request),
+        expires_at_ms = now_ms() + math.max(1, tonumber(config.get().approval.reservation_ttl_ms) or 30000),
     }
 end
 
@@ -227,8 +356,51 @@ local function approval_payload_matches(entry, request)
     return approval_target_matches(entry, request) and vim.deep_equal(entry.arguments, request.arguments or {})
 end
 
+local function remove_expired_approvals()
+    local current_time = now_ms()
+    local retained = {}
+
+    for _, entry in ipairs(pending_approvals) do
+        if entry.expires_at_ms > current_time then
+            table.insert(retained, entry)
+        end
+    end
+
+    pending_approvals = retained
+end
+
+---@param entry ministry.PendingApproval
+---@param request ministry.ApprovalRequest
+---@return boolean
+local function approval_binding_matches(entry, request)
+    local request_transport_session_id = approval_transport_session_id(request)
+    local request_logical_session_id = approval_logical_session_id(request)
+    local request_tool_call_id = approval_tool_call_id(request)
+
+    if entry.transport_session_id ~= nil then
+        if request_transport_session_id ~= entry.transport_session_id then
+            return false
+        end
+        return entry.tool_call_id == nil or request_tool_call_id == nil or request_tool_call_id == entry.tool_call_id
+    end
+
+    if entry.logical_session_id ~= nil then
+        if request_logical_session_id ~= entry.logical_session_id then
+            return false
+        end
+        return entry.tool_call_id == nil or request_tool_call_id == nil or request_tool_call_id == entry.tool_call_id
+    end
+
+    if entry.tool_call_id ~= nil then
+        return request_tool_call_id == entry.tool_call_id
+    end
+
+    return request_transport_session_id == nil and request_logical_session_id == nil and request_tool_call_id == nil
+end
+
 ---@param request ministry.ApprovalRequest
 local function remember_approval(request)
+    remove_expired_approvals()
     table.insert(pending_approvals, approval_entry(request))
 end
 
@@ -244,37 +416,21 @@ end
 ---@param request ministry.ApprovalRequest
 ---@return boolean|nil, table|nil
 local function consume_approval(request)
-    local tool_call_id = approval_tool_call_id(request)
-
-    if tool_call_id ~= nil then
-        for index, entry in ipairs(pending_approvals) do
-            if entry.tool_call_id == tool_call_id then
-                if approval_payload_matches(entry, request) then
-                    table.remove(pending_approvals, index)
-                    return true, nil
-                end
-
-                return false, mismatch_error(request)
-            end
-        end
-
-        return nil, nil
-    end
-
-    local has_pending_for_target = false
+    remove_expired_approvals()
+    local has_pending_for_binding = false
 
     for index, entry in ipairs(pending_approvals) do
-        if approval_payload_matches(entry, request) then
+        if approval_binding_matches(entry, request) and approval_payload_matches(entry, request) then
             table.remove(pending_approvals, index)
             return true, nil
         end
 
-        if approval_target_matches(entry, request) then
-            has_pending_for_target = true
+        if approval_binding_matches(entry, request) and approval_target_matches(entry, request) then
+            has_pending_for_binding = true
         end
     end
 
-    if has_pending_for_target then
+    if has_pending_for_binding then
         return false, mismatch_error(request)
     end
 
@@ -418,6 +574,25 @@ end
 function M.approve_once(request)
     remember_approval(request)
     return true, nil
+end
+
+---@param session_id string
+function M.cancel_session(session_id)
+    local retained = {}
+
+    for _, entry in ipairs(pending_approvals) do
+        if entry.transport_session_id ~= session_id then
+            table.insert(retained, entry)
+        end
+    end
+
+    pending_approvals = retained
+end
+
+---@return ministry.PendingApproval[]
+function M._debug_pending_approvals()
+    remove_expired_approvals()
+    return vim.deepcopy(pending_approvals)
 end
 
 ---@param namespaced_name string

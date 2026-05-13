@@ -1,10 +1,10 @@
 describe('mcp', function()
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
     end)
     it('implements identifier-based editor tools and real terminal tools', function()
         local plugin = require('ministry')
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         vim.api.nvim_buf_set_lines(0, 0, -1, false, { 'before' })
         local current_bufnr = vim.api.nvim_get_current_buf()
@@ -64,13 +64,57 @@ describe('mcp', function()
         assert.is_true(release_result.released)
     end)
 
+    it('notifies terminal lifecycle listeners for real terminal creation, release, and reset', function()
+        local plugin = require('ministry')
+        local created_events = {}
+        local released_events = {}
+        local reset_events = 0
+
+        require('tests.helpers.ministry').setup(plugin, {
+            auto_start = false,
+            enable_terminal_tools = true,
+        })
+        local registered, register_err = plugin.register_terminal_lifecycle_listener('fixture', {
+            created = function(terminal)
+                table.insert(created_events, terminal)
+            end,
+            released = function(terminal)
+                table.insert(released_events, terminal)
+            end,
+            reset = function()
+                reset_events = reset_events + 1
+            end,
+        })
+        local created, create_err = plugin.call_tool('neovim/terminal/create', {
+            command = { 'printf', 'hello' },
+        }, {})
+
+        assert.is_nil(register_err)
+        assert.are.same({ owner = 'fixture', registered = true }, registered)
+        assert.is_nil(create_err)
+        assert.are.equal(1, #created_events)
+        assert.are.equal(created.terminal_id, created_events[1].terminal_id)
+        assert.are.same({ 'printf', 'hello' }, created_events[1].command)
+
+        local _, release_err = plugin.call_tool('neovim/terminal/release', {
+            terminal_id = created.terminal_id,
+        }, {})
+
+        assert.is_nil(release_err)
+        assert.are.equal(1, #released_events)
+        assert.are.equal(created.terminal_id, released_events[1].terminal_id)
+
+        require('tests.helpers.ministry').reset(plugin)
+        assert.are.equal(1, reset_events)
+    end)
+
     it('loads unopened files into hidden buffers for buffer-id editor workflows', function()
         local plugin = require('ministry')
         local path = vim.fn.tempname()
         local current_win = vim.api.nvim_get_current_win()
         local current_buf = vim.api.nvim_get_current_buf()
 
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
         vim.fn.writefile({ 'return 7' }, path)
 
         local opened, open_err = plugin.call_tool('neovim/editor/open_buffer', {
@@ -96,7 +140,7 @@ describe('mcp', function()
 
     it('returns structured errors for identifier-based editor tool invalid arguments and invalid buffers', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local current_bufnr = vim.api.nvim_get_current_buf()
         local invalid_bufnr = current_bufnr + 9999
@@ -342,7 +386,7 @@ describe('mcp', function()
 
     it('returns structured errors for editor/write_buffer invalid arguments and non-modifiable buffers', function()
         local plugin = require('ministry')
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local current_bufnr = vim.api.nvim_get_current_buf()
         local invalid_result, invalid_err = plugin.call_tool('neovim/editor/write_buffer', {
@@ -372,9 +416,9 @@ describe('mcp', function()
         assert.are.equal(string.format('Buffer %d is not modifiable', current_bufnr), readonly_err.message)
     end)
 
-    it('returns an error when waiting for terminal completion in a fast event context', function()
+    it('returns immediately when waiting for terminal completion in a fast event context', function()
         local plugin = require('ministry')
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         local terminal_result, terminal_err = plugin.call_tool('neovim/terminal/create', {
             command = { 'sh', '-c', 'sleep 0.05; printf hello' },
@@ -394,12 +438,14 @@ describe('mcp', function()
         vim.in_fast_event = original_in_fast_event
 
         assert.is_nil(terminal_err)
-        assert.is_nil(wait_result)
-        assert.is_not_nil(wait_err)
-        assert.truthy(string.find(wait_err.message, 'fast events', 1, true))
+        assert.is_nil(wait_err)
+        assert.are.same({
+            terminal_id = terminal_result.terminal_id,
+            completed = false,
+        }, wait_result)
     end)
 
-    it('returns a structured error when terminal wait produces no result', function()
+    it('returns a pending result when the terminal has not completed', function()
         local runtime = require('ministry.builtin.terminal_runtime')
         local _, get_terminal = debug.getupvalue(runtime.output, 1)
         local _, terminals = debug.getupvalue(get_terminal, 1)
@@ -419,11 +465,72 @@ describe('mcp', function()
 
         local wait_result, wait_err = runtime.wait(terminal_id)
 
-        assert.is_nil(wait_result)
+        assert.is_nil(wait_err)
         assert.are.same({
-            code = -32000,
-            message = 'terminal wait failed to produce a completion result',
-        }, wait_err)
+            terminal_id = terminal_id,
+            completed = false,
+        }, wait_result)
+    end)
+
+    it('streams bounded terminal output and polls completion without killing the process', function()
+        local plugin = require('ministry')
+        require('tests.helpers.ministry').setup(plugin, {
+            enable_terminal_tools = true,
+            terminal = {
+                max_output_bytes = 8,
+                max_wait_timeout_ms = 20,
+                wait_timeout_ms = 0,
+            },
+        })
+
+        local terminal_result, terminal_err = plugin.call_tool('neovim/terminal/create', {
+            command = {
+                'sh',
+                '-c',
+                'printf 1234567890; printf abcdefghij >&2; sleep 0.15',
+            },
+        }, {})
+        assert.is_nil(terminal_err)
+
+        assert.is_true(vim.wait(100, function()
+            local output = assert(plugin.call_tool('neovim/terminal/output', {
+                terminal_id = terminal_result.terminal_id,
+            }, {}))
+            return output.stdout == '34567890' and output.stderr == 'cdefghij'
+        end, 1))
+
+        local started = vim.uv.hrtime()
+        local wait_result, wait_err = plugin.call_tool('neovim/terminal/wait', {
+            terminal_id = terminal_result.terminal_id,
+            timeout_ms = 0,
+        }, {})
+        local elapsed_ms = (vim.uv.hrtime() - started) / 1000000
+
+        assert.is_nil(wait_err)
+        assert.is_false(wait_result.completed)
+        assert.is_true(elapsed_ms < 20)
+
+        local output = assert(plugin.call_tool('neovim/terminal/output', {
+            terminal_id = terminal_result.terminal_id,
+        }, {}))
+        assert.are.equal('34567890', output.stdout)
+        assert.are.equal('cdefghij', output.stderr)
+        assert.is_true(output.stdout_truncated)
+        assert.is_true(output.stderr_truncated)
+        assert.is_false(output.completed)
+
+        assert.is_true(vim.wait(1000, function()
+            return assert(plugin.call_tool('neovim/terminal/wait', {
+                terminal_id = terminal_result.terminal_id,
+                timeout_ms = 10,
+            }, {})).completed
+        end, 10))
+
+        local release_result, release_err = plugin.call_tool('neovim/terminal/release', {
+            terminal_id = terminal_result.terminal_id,
+        }, {})
+        assert.is_nil(release_err)
+        assert.is_true(release_result.released)
     end)
 
     it('accumulates terminal output chunks before wait', function()
@@ -473,7 +580,11 @@ describe('mcp', function()
             },
             stdout_chunks = { 'hello', ' world' },
             stderr_chunks = { 'err1', ' err2' },
-            completed = nil,
+            completed = {
+                code = 0,
+                stdout = 'hello world',
+                stderr = 'err1 err2',
+            },
         }
 
         local wait_result, wait_err = runtime.wait(terminal_id)
@@ -507,7 +618,10 @@ describe('mcp', function()
             },
             stdout_chunks = {},
             stderr_chunks = {},
-            completed = nil,
+            completed = {
+                code = nil,
+                signal = 15,
+            },
         }
 
         local wait_result, wait_err = runtime.wait(terminal_id)
@@ -681,7 +795,7 @@ describe('mcp', function()
 
     it('returns structured errors for terminal invalid arguments and released terminal lookups', function()
         local plugin = require('ministry')
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         local missing_command_result, missing_command_err = plugin.call_tool('neovim/terminal/create', {}, {})
         local invalid_command_result, invalid_command_err = plugin.call_tool('neovim/terminal/create', {

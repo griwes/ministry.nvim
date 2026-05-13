@@ -1,6 +1,6 @@
 describe('mcp', function()
     before_each(function()
-        require('ministry').reset()
+        require('tests.helpers.ministry').reset()
     end)
     it('starts and stops the live server lifecycle', function()
         local plugin = require('ministry')
@@ -202,7 +202,7 @@ describe('mcp', function()
         end
 
         local ok, err = pcall(function()
-            plugin.setup({ auto_start = false })
+            require('tests.helpers.ministry').setup(plugin, { auto_start = false })
 
             assert.is_true(plugin.start())
             listener_read_cb(nil)
@@ -287,7 +287,7 @@ describe('mcp', function()
     it('registers the built-in editor server during setup', function()
         local plugin = require('ministry')
 
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         local servers = plugin.list_servers()
         local tools = plugin.list_tool_descriptors()
@@ -358,7 +358,7 @@ describe('mcp', function()
     it('advertises terminal tools when explicitly enabled', function()
         local plugin = require('ministry')
 
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         local tool_names = vim.tbl_map(function(tool)
             return tool.namespaced_name
@@ -370,7 +370,7 @@ describe('mcp', function()
     it('does not advertise terminal tools by default', function()
         local plugin = require('ministry')
 
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local tool_names = vim.tbl_map(function(tool)
             return tool.namespaced_name
@@ -414,7 +414,7 @@ describe('mcp', function()
     it('owns built-in Neovim MCP routing guidance', function()
         local plugin = require('ministry')
 
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         local guidance = plugin.server_guidance('neovim', {
             agent_capabilities = {
@@ -455,7 +455,7 @@ describe('mcp', function()
     it('filters built-in Neovim guidance by advertised MCP capability family', function()
         local plugin = require('ministry')
 
-        plugin.setup({ enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
         local resources_guidance = plugin.server_guidance('neovim', {
             agent_capabilities = {
@@ -490,7 +490,7 @@ describe('mcp', function()
     it('emits built-in Neovim guidance when MCP capabilities are unknown', function()
         local plugin = require('ministry')
 
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local guidance = plugin.server_guidance('neovim', {
             agent_capabilities = {
@@ -510,7 +510,7 @@ describe('mcp', function()
     it('suppresses built-in Neovim guidance for explicit empty MCP capabilities', function()
         local plugin = require('ministry')
 
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         assert.is_nil(plugin.server_guidance('neovim', {
             agent_capabilities = {
@@ -530,8 +530,8 @@ describe('mcp', function()
     it('drops built-in terminal tools when setup disables them after enabling', function()
         local plugin = require('ministry')
 
-        plugin.setup({ enable_terminal_tools = true })
-        plugin.setup({ enable_terminal_tools = false })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
+        require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = false })
 
         local tool_names = vim.tbl_map(function(tool)
             return tool.namespaced_name
@@ -600,8 +600,8 @@ describe('mcp', function()
                 },
             })
 
-            plugin.setup({ enable_terminal_tools = true })
-            plugin.setup({ enable_terminal_tools = true })
+            require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
+            require('tests.helpers.ministry').setup(plugin, { enable_terminal_tools = true })
 
             local tools = plugin.list_tool_descriptors()
             local resources = plugin.list_resource_descriptors()
@@ -712,7 +712,7 @@ describe('mcp', function()
 
     it('exposes a bridge-friendly endpoint invocation descriptor', function()
         local plugin = require('ministry')
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             socket_prefix = 'invoke_mcp',
             bridge_command = 'socat',
         })
@@ -721,12 +721,12 @@ describe('mcp', function()
         local endpoint = plugin.endpoint()
 
         assert.are.equal('socat', invocation.command)
-        assert.are.same({ '-', 'ABSTRACT-CONNECT:' .. endpoint.socket_name }, invocation.args)
+        assert.are.same({ '-', 'UNIX-CONNECT:' .. endpoint.socket_name }, invocation.args)
     end)
 
     it('describes an HTTP endpoint when configured', function()
         local plugin = require('ministry')
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = 'http',
             http_host = '127.0.0.1',
             http_port = 8877,
@@ -741,7 +741,7 @@ describe('mcp', function()
 
     it('advertises HTTP bearer auth in the invocation descriptor', function()
         local plugin = require('ministry')
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = 'http',
             http_host = '127.0.0.1',
             http_port = 8877,
@@ -762,7 +762,7 @@ describe('mcp', function()
 
     it('brackets IPv6 hosts in advertised HTTP endpoints', function()
         local plugin = require('ministry')
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = 'http',
             http_host = '::1',
             http_port = 8877,
@@ -780,7 +780,7 @@ describe('mcp', function()
         local endpoint = nil
         local invocation = nil
         local ok, err = xpcall(function()
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 transport = 'http',
                 http_host = '127.0.0.1',
                 http_port = 0,
@@ -791,7 +791,7 @@ describe('mcp', function()
             invocation = plugin.endpoint_invocation()
         end, debug.traceback)
 
-        plugin.reset()
+        require('tests.helpers.ministry').reset(plugin)
 
         if not ok then
             error(err)
@@ -806,14 +806,14 @@ describe('mcp', function()
     it('restores defaults for omitted config on repeated setup calls', function()
         local plugin = require('ministry')
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = 'http',
             http_host = '127.0.0.1',
             http_port = 8877,
             enable_terminal_tools = true,
         })
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             http_host = '127.0.0.2',
         })
 
@@ -846,7 +846,7 @@ describe('mcp', function()
         end
 
         local ok, err = xpcall(function()
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 transport = 'http',
                 http_host = '127.0.0.1',
                 http_port = 8877,
@@ -890,7 +890,7 @@ describe('mcp', function()
         end
 
         local ok, err = xpcall(function()
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 transport = 'http',
                 http_host = '127.0.0.1',
                 http_port = 8877,
@@ -995,7 +995,7 @@ describe('mcp', function()
         end
 
         local ok, err = xpcall(function()
-            plugin.setup({ transport = 'socket' })
+            require('tests.helpers.ministry').setup(plugin, { transport = 'socket' })
 
             assert.are.same({ 'socket' }, start_calls)
             assert.is_false(new_pipe_arg)
@@ -1031,7 +1031,7 @@ describe('mcp', function()
         end
 
         local ok, err = xpcall(function()
-            plugin.setup({ transport = 'socket' })
+            require('tests.helpers.ministry').setup(plugin, { transport = 'socket' })
 
             assert.are.same({}, start_calls)
             assert.is_false(new_pipe_arg)
@@ -1064,7 +1064,7 @@ describe('mcp', function()
         end
 
         local ok, err = xpcall(function()
-            plugin.setup({ transport = 'socket' })
+            require('tests.helpers.ministry').setup(plugin, { transport = 'socket' })
 
             assert.are.same({}, start_calls)
             assert.is_false(new_pipe_arg)
@@ -1097,7 +1097,7 @@ describe('mcp', function()
         end
 
         local ok, err = xpcall(function()
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 transport = 'http',
                 auto_start = false,
                 http_host = '127.0.0.1',
@@ -1116,13 +1116,72 @@ describe('mcp', function()
         end
     end)
 
+    it('stops only the listener owned by setup when auto-start is disabled later', function()
+        local plugin = require('ministry')
+        local server = require('ministry.transport.server')
+        local original_new_pipe = vim.uv.new_pipe
+        local original_start = server.start
+        local original_stop_transport = server.stop_transport
+        local original_transport_running = server.transport_running
+        local running = {
+            http = false,
+            socket = false,
+        }
+        local stopped = {}
+
+        vim.uv.new_pipe = function()
+            return {
+                bind2 = function() end,
+                close = function() end,
+            }
+        end
+        server.start = function(transport)
+            running[transport] = true
+            return true, nil
+        end
+        server.stop_transport = function(transport)
+            running[transport] = false
+            table.insert(stopped, transport)
+        end
+        server.transport_running = function(transport)
+            return running[transport]
+        end
+
+        local ok, err = xpcall(function()
+            require('tests.helpers.ministry').setup(plugin, {
+                auto_start = true,
+                transport = 'socket',
+            })
+            local started, start_err = plugin.start('http')
+            require('tests.helpers.ministry').setup(plugin, {
+                auto_start = false,
+                transport = 'socket',
+            })
+
+            assert.is_true(started)
+            assert.is_nil(start_err)
+            assert.are.same({ 'socket' }, stopped)
+            assert.is_false(running.socket)
+            assert.is_true(running.http)
+        end, debug.traceback)
+
+        server.transport_running = original_transport_running
+        server.stop_transport = original_stop_transport
+        server.start = original_start
+        vim.uv.new_pipe = original_new_pipe
+
+        if not ok then
+            error(err)
+        end
+    end)
+
     it('uses the configured transport for default start and endpoint invocation', function()
         local plugin = require('ministry')
         local server = require('ministry.transport.server')
         local start_calls = {}
         local original_start = server.start
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = 'http',
             http_host = '127.0.0.1',
             http_port = 8877,
@@ -1154,7 +1213,7 @@ describe('mcp', function()
         local plugin = require('ministry')
         local http_server = require('ministry.transport.http.server')
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = 'http',
             http_host = '127.0.0.1',
             http_port = 0,
@@ -1171,7 +1230,7 @@ describe('mcp', function()
             assert.are.equal(string.format('http://127.0.0.1:%d/mcp', port), endpoint.url)
         end, debug.traceback)
 
-        plugin.reset()
+        require('tests.helpers.ministry').reset(plugin)
 
         if not ok then
             error(err)
@@ -1182,7 +1241,7 @@ describe('mcp', function()
         local plugin = require('ministry')
         local http_server = require('ministry.transport.http.server')
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = 'http',
             http_host = '127.0.0.1',
             http_port = 0,
@@ -1202,7 +1261,7 @@ describe('mcp', function()
             assert.are.equal(port, endpoint.http_port)
         end, debug.traceback)
 
-        plugin.reset()
+        require('tests.helpers.ministry').reset(plugin)
 
         if not ok then
             error(err)
@@ -1213,7 +1272,7 @@ describe('mcp', function()
         local plugin = require('ministry')
         local http_server = require('ministry.transport.http.server')
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = 'http',
             http_host = '127.0.0.1',
             http_port = 0,
@@ -1224,7 +1283,7 @@ describe('mcp', function()
         assert.is_nil(start_err)
         assert.is_not_nil(plugin.http_endpoint())
 
-        plugin.reset()
+        require('tests.helpers.ministry').reset(plugin)
 
         assert.is_nil(plugin.http_endpoint())
         local host, port = http_server.bound_address()
@@ -1955,7 +2014,7 @@ describe('mcp', function()
         local callback
         local original_config = vim.deepcopy(plugin.config)
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = 'http',
             http_host = '127.0.0.1',
             http_port = 0,
@@ -2006,7 +2065,7 @@ describe('mcp', function()
             return debug.traceback(message, 2)
         end)
 
-        plugin.setup(original_config)
+        require('tests.helpers.ministry').setup(plugin, original_config)
         if not ok then
             error(err)
         end
@@ -2019,7 +2078,7 @@ describe('mcp', function()
         local callback
         local original_config = vim.deepcopy(plugin.config)
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = 'http',
             http_host = '127.0.0.1',
             http_port = 0,
@@ -2063,7 +2122,7 @@ describe('mcp', function()
             return debug.traceback(message, 2)
         end)
 
-        plugin.setup(original_config)
+        require('tests.helpers.ministry').setup(plugin, original_config)
         if not ok then
             error(err)
         end
@@ -2078,7 +2137,7 @@ describe('mcp', function()
             local callback
             local original_config = vim.deepcopy(plugin.config)
 
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 transport = 'http',
                 http_host = '127.0.0.1',
                 http_port = 0,
@@ -2124,7 +2183,7 @@ describe('mcp', function()
                 return debug.traceback(message, 2)
             end)
 
-            plugin.setup(original_config)
+            require('tests.helpers.ministry').setup(plugin, original_config)
             if not ok then
                 error(err)
             end
@@ -2140,7 +2199,7 @@ describe('mcp', function()
             local callback
             local original_config = vim.deepcopy(plugin.config)
 
-            plugin.setup({
+            require('tests.helpers.ministry').setup(plugin, {
                 transport = 'http',
                 http_host = '127.0.0.1',
                 http_port = 0,
@@ -2187,7 +2246,7 @@ describe('mcp', function()
                 return debug.traceback(message, 2)
             end)
 
-            plugin.setup(original_config)
+            require('tests.helpers.ministry').setup(plugin, original_config)
             if not ok then
                 error(err)
             end
@@ -2360,7 +2419,7 @@ describe('mcp', function()
             end,
         }
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = {
                 type = 'http',
                 http = {
@@ -2558,7 +2617,7 @@ describe('mcp', function()
             end,
         }
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = {
                 type = 'http',
                 http = {
@@ -2615,7 +2674,7 @@ describe('mcp', function()
             end,
         }
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = {
                 type = 'http',
                 http = {
@@ -2672,7 +2731,7 @@ describe('mcp', function()
             end,
         }
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = {
                 type = 'http',
                 http = {
@@ -2729,7 +2788,7 @@ describe('mcp', function()
             end,
         }
 
-        plugin.setup({
+        require('tests.helpers.ministry').setup(plugin, {
             transport = {
                 type = 'http',
                 http = {
@@ -4221,7 +4280,7 @@ describe('mcp', function()
         local plugin = require('ministry')
         local http_server = require('ministry.transport.http.server')
 
-        plugin.setup()
+        require('tests.helpers.ministry').setup(plugin)
 
         local function run(payload)
             local writes = {}
