@@ -1,22 +1,35 @@
 # Ministry
 
-Neovim-native unified MCP substrate with namespaced sub-server registration and one endpoint per continuity.
+Neovim-native unified MCP substrate with namespaced sub-server registration and one endpoint per Neovim instance.
 
 ## Status
 
 Early development.
 
+## Requirements
+
+- Neovim 0.11 or newer
+- `socat` when a client needs the advertised Unix-socket bridge command
+- optional integrations: `nvim-dap`, `conform.nvim`, `mason.nvim`,
+  `nvim-lint`, `nvim-coverage`, `overseer.nvim`, `stratum.nvim`, and
+  `terminalia.nvim`
+
+Linux is the primary supported and CI-tested platform. The project is in early
+development and currently publishes from `main` without a stable release tag.
+
 ## Installation
 
-Example local `lazy.nvim` spec:
+With `lazy.nvim`:
 
 ```lua
 {
-    dir = vim.fn.expand("~/projects/neovim-plugin-orchestration/ministry.nvim"),
-    name = 'ministry.nvim',
+    'griwes/ministry.nvim',
     opts = {},
 }
 ```
+
+Run `:checkhealth ministry` after installation. See `:help ministry` for the
+transport, approval, and command overview.
 
 ## Development
 
@@ -24,6 +37,10 @@ Example local `lazy.nvim` spec:
 - formatting is enforced with Stylua
 - Lua modules should carry LuaLS annotations and doc comments
 - CI lives in `.github/workflows/ci.yml`
+
+## License
+
+Apache-2.0. See [`LICENSE`](LICENSE).
 
 ## Built-in MCP surface
 

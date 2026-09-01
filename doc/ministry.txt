@@ -1,0 +1,58 @@
+*ministry.txt*                    Ministry MCP substrate
+
+==============================================================================
+CONTENTS                                                      *ministry-contents*
+
+1. Introduction ............................................. |ministry|
+2. Setup ..................................................... |ministry-setup|
+3. Security .................................................. |ministry-security|
+4. Commands .................................................. |ministry-commands|
+5. Health .................................................... |ministry-health|
+
+==============================================================================
+INTRODUCTION                                                      *ministry*
+
+Ministry exposes Neovim-owned tools and resources through namespaced MCP
+servers. It supports a local socket transport, loopback HTTP, and explicitly
+configured external MCP servers. Neovim 0.11 or newer is required.
+
+==============================================================================
+SETUP                                                    *ministry-setup*
+
+>lua
+    require('ministry').setup({
+        transport = 'socket',
+        auto_start = true,
+        enable_terminal_tools = false,
+    })
+<
+
+External server discovery is disabled by default. Enable it with
+`external.enabled = true`, then call `refresh_external_servers()` when commands
+should be started or refreshed.
+
+==============================================================================
+SECURITY                                              *ministry-security*
+
+Terminal tools execute host commands and are disabled by default. Non-loopback
+HTTP listeners require a bearer token. Keep approval policy enabled for
+untrusted clients and review |:MinistryServers| before activation.
+
+See `docs/security.md` in the repository for the full trust model.
+
+==============================================================================
+COMMANDS                                              *ministry-commands*
+
+*:MinistryServers*    Inspect native and external servers and policy.
+*:MinistryApprove*    Allow a server or method.
+*:MinistryReject*     Reject a server or method.
+*:MinistryAsk*        Reset a server or method to interactive approval.
+
+==============================================================================
+HEALTH                                                  *ministry-health*
+
+Run: >vim
+    :checkhealth ministry
+<
+
+vim:tw=78:ts=8:noet:ft=help:norl:
