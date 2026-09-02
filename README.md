@@ -33,10 +33,12 @@ transport, approval, and command overview.
 
 ## Development
 
-- tests live in `tests/`
-- formatting is enforced with Stylua
-- Lua modules should carry LuaLS annotations and doc comments
-- CI lives in `.github/workflows/ci.yml`
+Run `scripts/ci/run.sh` for the repository-local Stylua, test, and clean-install
+smoke checks. GitHub Actions runs the tests and clean-install smoke checks on
+Neovim 0.11.5, stable, and nightly. A separate lint job runs Stylua and
+validates workflow syntax with actionlint, and another job covers Legate
+compatibility. Tests live under `tests/`; the workflow is
+`.github/workflows/ci.yml`.
 
 ## License
 
