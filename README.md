@@ -33,9 +33,10 @@ transport, approval, and command overview.
 
 ## Development
 
-Run `scripts/ci/run.sh` for the same Stylua and test gates used by CI. Tests
-live under `tests/`; the GitHub Actions workflow is
-`.github/workflows/ci.yml`.
+Run `scripts/ci/run.sh` for the repository-local Stylua, test, and clean-install
+smoke checks. GitHub Actions runs them on Neovim 0.11.5, stable, and nightly,
+validates workflow syntax with actionlint, and runs the Legate compatibility
+job. Tests live under `tests/`; the workflow is `.github/workflows/ci.yml`.
 
 ## License
 
