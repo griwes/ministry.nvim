@@ -38,6 +38,10 @@ jobs:
             - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
             - name: Install Neovim
               run: scripts/ci/install-neovim.sh '${{ matrix.neovim }}'
+            - name: Install bridge integration dependency
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install --yes socat
             - name: Run tests
               run: scripts/ci/test.sh
             - name: Run clean-install smoke
